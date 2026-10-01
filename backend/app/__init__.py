@@ -1,0 +1,1 @@
+"""Voxora backend application."""
