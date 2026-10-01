@@ -1,8 +1,8 @@
 # Voxora 软件设计详细规格
 
 > 产品副标题：English for the semiconductor world  
-> 文档状态：Draft v0.2（开发规格草案）  
-> 日期：2026-10-01  
+> 文档状态：Draft v0.3（开发规格草案）  
+> 日期：2026-10-02  
 > 产品需求来源：`../semispeak.md`  
 > 本文目标：让开发者可据此创建工程、实现数据库/API/核心流程，并编写验收测试。
 
@@ -26,10 +26,12 @@
 | ORM | 暂定 | SQLAlchemy 2.x async ORM；复杂报表可用显式 SQL |
 | 系统形态 | 已定 | 单体后端，按业务模块分层；不拆微服务 |
 | 缓存/队列 | 已定 | MVP 不引入 Redis/Celery |
-| 首发交互 | 已定 | 文字 Roleplay 闭环先行；语音作为后续迭代，数据模型预留 input_mode |
+| 首发交互 | 已定 | 文字 Roleplay 闭环先行；语音输入作为后续迭代（见 §7.11、§8.6、§10.4），数据模型预留 input_mode |
+| 语音输入路径 | 已定 | 语音是输入方式而非消息类型：录音→上传→服务端转写→文本走现有发送接口；音频不写入会话与消息表 |
+| 转写执行位置 | 已定 | 服务端转写（本机 faster-whisper）；设备端转写不作为本期方案，理由见 §8.6 |
 | 用户范围 | 暂定 | 第一阶段个人私用；部署前不开放公网、不提供匿名多用户服务 |
 | AI 评价目标 | 已定 | 评价英语沟通，不评判技术结论正确性 |
-| 录音保存 | 已定 | 本版不保存音频；未来启用前另定同意、存储、删除与保留政策 |
+| 录音保存 | 已定 | 本版不保存音频：上传的音频仅用于一次转写，转写完成或失败后即删除，不落库、不进日志；将来若要保存，须先另定同意、存储、删除与保留政策 |
 | Auth | 暂定 | 本地开发阶段不做完整注册；公网部署前必须加入服务端认证与数据归属校验 |
 
 如要把应用交给他人或部署到公网，必须先完成 Auth、限流、隐私条款、备份和数据删除，不得把无认证开发版直接暴露公网。
@@ -40,7 +42,7 @@
 
 Voxora 面向希望进入或已在半导体国际化企业工作的工程师，训练真实工作与生活场景中的英语沟通。目标公司覆盖半导体产业链上下游。公司、岗位、技术领域是场景上下文；英语表达能力是学习目标。
 
-第一位用户为产品创建者本人，近期目标为约半年后参加 KLA / ASML metrology 软件工程师或算法工程师面试。长期场景覆盖面试、会议、技术讨论、汇报、客户沟通、商务出差和日常生活。
+首个用户群体为半导体行业的工程师，典型诉求是在半年到一年内用英语完成技术岗位面试。长期场景覆盖面试、会议、技术讨论、汇报、客户沟通、商务出差和日常生活。
 
 ### 1.2 MVP 闭环
 
@@ -68,7 +70,7 @@ Voxora 面向希望进入或已在半导体国际化企业工作的工程师，�
 ### 1.4 MVP 不做
 
 - 社区、排行榜、积分商城、真人教师、直播课程。
-- 实时 WebRTC、多人语音会议、音频实时分析。
+- 实时 WebRTC、多人语音会议、音频实时分析、流式语音识别（按住说话是“录完再传再转写”，不属于本项，见 §10.4）。
 - 自动创建上百个未经审核的场景。
 - 复杂个性化推荐算法、知识图谱、向量搜索。
 - 微服务、Redis、任务队列、Kubernetes。
@@ -143,6 +145,7 @@ Voxora 面向希望进入或已在半导体国际化企业工作的工程师，�
 | 测试 | pytest + HTTPX + pytest-asyncio | 单元、API、Repository 测试分层 |
 | 本地数据库 | PostgreSQL Docker Compose | 命名 volume；健康检查；非生产密码仅用于本机 |
 | AI | 后端 Provider 接口 + 一个初始实现 | 模型名、超时和密钥来自环境配置 |
+| 语音转写 | 后端 SpeechProvider + 本机 faster-whisper | 音频不保存；协议与供应商无关，测试用 FakeSpeechProvider |
 
 版本统一由锁文件和依赖清单锁定；不在设计文档中写可能过期的 patch version。
 
@@ -213,6 +216,7 @@ voxora/
 │   └── docker-compose.yml
 ├── docs/
 │   ├── software-design-v0.1.md
+│   ├── progress.md
 │   └── adr/
 ├── .env.example
 ├── .gitignore
@@ -331,7 +335,7 @@ scenarios N──N skills（通过 scenario_skills）
 | scenario_version | INTEGER | 创建会话时的版本 |
 | scenario_snapshot | JSONB | 创建时的必要场景快照 |
 | status | VARCHAR(20) | active/completed/abandoned |
-| input_mode | VARCHAR(12) | text/voice；MVP 只启用 text |
+| input_mode | VARCHAR(12) | text/voice；MVP 只启用 text。语音迭代启用后写入 voice，仅作会话偏好标记，不改变消息结构 |
 | turn_count | INTEGER | 默认 0，CHECK >= 0 |
 | processing_turn_id | UUID nullable | 非空表示本会话正在处理一轮消息 |
 | last_activity_at | TIMESTAMPTZ | not null |
@@ -352,7 +356,7 @@ scenarios N──N skills（通过 scenario_skills）
 | role | VARCHAR(12) | user/assistant |
 | content | TEXT | 文本内容；长度上限由 API 配置 |
 | status | VARCHAR(12) | pending/completed/failed |
-| audio_metadata | JSONB nullable | MVP 保持 null，不保存音频 |
+| audio_metadata | JSONB nullable | 始终为 null；音频不写入数据库（见 §7.11） |
 | created_at | TIMESTAMPTZ | not null |
 
 约束：`UNIQUE(session_id, client_message_id, role)`；`UNIQUE(session_id, turn_index, role)`。AI 回复与用户输入分别各一条记录。
@@ -515,7 +519,7 @@ review_items(user_id, status, due_at)
 }
 ```
 
-校验：scenario 必须 published；MVP 只允许 text；初始 AI opening line 作为 turn 0 assistant message 保存并返回，确保 UI 重载后状态一致。
+校验：scenario 必须 published；MVP 只接受 `text`，语音迭代启用后接受 `voice`（仅偏好标记，请求体不携带音频）；初始 AI opening line 作为 turn 0 assistant message 保存并返回，确保 UI 重载后状态一致。
 
 ### 7.6 发送用户消息
 
@@ -631,7 +635,35 @@ review_items(user_id, status, due_at)
 
 `PATCH /api/v1/review-items/{id}` 请求仅允许更新 `status`, `due_at`, `success_count`, `failure_count`；禁止通过客户端更改 user_id/source ownership。
 
-### 7.11 错误码清单
+### 7.11 语音转写
+
+`POST /api/v1/practice/speech/transcriptions`
+
+Content-Type：`multipart/form-data`；字段 `audio_file`（必填）、`language`（可选，默认 `en`）、`duration_ms`（可选）。
+
+响应 200：
+
+```json
+{
+  "text": "I worked on a measurement pipeline that improved throughput.",
+  "language": "en",
+  "duration_ms": 3240,
+  "provider": "faster_whisper",
+  "model": "distil-large-v3"
+}
+```
+
+行为约定：
+
+1. 这是**输入法端点，不是消息端点**：只把音频转成文本返回，不创建消息、不修改会话状态、不推进 `turn_count`、不写 `processing_turn_id`。客户端拿到 `text` 后走 §7.6 发送，复用同一套幂等与并发规则。
+2. 音频不落库、不进日志、不进 transcript。转写在临时文件上完成，无论成功失败都在响应返回前删除。
+3. 上限：单段最长 60 秒、最大 10 MB（配置项）；接受 `audio/m4a`、`audio/aac`、`audio/wav`、`audio/mpeg`、`audio/ogg`。超限返回 413 `payload_too_large`，格式不支持返回 415 `unsupported_media_type`。
+4. 未识别出有效语音时返回 422 `speech_not_recognized`，而不是返回空文本 —— 客户端据此提示重录，避免生成空消息。
+5. 转写 provider 超时返回 504 `ai_provider_timeout`，上游异常返回 502 `ai_provider_error`；客户端可重试同一段音频。
+6. 该端点不接收 `session_id`，与会话解耦。若将来要把转写绑定到场景上下文（例如用场景提示词提升专有名词准确率），必须重新定义契约，不得直接加字段。
+7. 转写结果不进入任何历史记录，客户端不得把它当持久数据（同 §10.2）；最终以发送的文本为准。
+
+### 7.12 错误码清单
 
 | HTTP | code | 含义 |
 |---:|---|---|
@@ -640,8 +672,10 @@ review_items(user_id, status, due_at)
 | 409 | session_not_active | session 已结束/放弃 |
 | 409 | turn_in_progress | 同 session 有另一轮正在生成 |
 | 409 | session_has_no_user_turns | 没有可评价的用户发言 |
-| 413 | payload_too_large | 文本或请求超限 |
+| 413 | payload_too_large | 文本、请求或音频超限 |
+| 415 | unsupported_media_type | 音频格式不在允许列表内 |
 | 422 | validation_error | 字段校验失败 |
+| 422 | speech_not_recognized | 音频中未识别出有效语音 |
 | 502 | ai_provider_error | 上游 AI 错误/无效响应 |
 | 503 | service_unavailable | 数据库或依赖暂时不可用 |
 | 504 | ai_provider_timeout | AI 调用超时 |
@@ -724,6 +758,27 @@ evaluation_english_v1.txt
 
 Prompt 内容只通过场景的受控字段拼接；用户输入视为不可信文本，不能让其覆盖 system/developer 规则。修改评价定义时更新 prompt/rubric version，并新增回归样例。
 
+### 8.6 Speech 转写设计
+
+```python
+class SpeechProvider(Protocol):
+    async def transcribe(
+        self, audio: bytes, *, content_type: str, language: str
+    ) -> TranscriptResult: ...
+```
+
+`TranscriptResult` 至少含 `text`、`language`、`duration_ms`、`provider`、`model`。与 §8.1 同规则：Service 只依赖协议，测试用 `FakeSpeechProvider`；真实实现负责超时、异常映射与输出校验（空文本、非目标语言、重复幻觉片段）。
+
+实现选择（本版已定）：
+
+- **服务端转写，不做设备端。** 两个理由：一是国内 Android 机型普遍缺少可用的系统语音服务，设备端方案的可用性不成立；二是 §3.1 已定客户端不持有模型与密钥，端上跑 Whisper 还要把模型塞进安装包。
+- 本期实现为本机 `faster-whisper`（CUDA，量化推理）。个人使用阶段音频不出本机，无 per-minute 成本，也不依赖境外网络。GPU 不可用时回退 CPU 或更小模型，由配置决定。
+- 云 STT 不属本期实现，但协议保持供应商无关：换云服务只需新增一个 `SpeechProvider` 实现，API 契约不变。
+- 转写与 Roleplay / Evaluation 是彼此独立的 provider，超时分别配置；转写失败不得映射为会话状态变化。
+- 不做流式识别。一期是“录完 → 整段转写”，流式属于 §1.4 的不做范围。
+
+转写无 prompt，不适用 §8.5 的 prompt 版本管理，但 `provider` / `model` 必须随结果返回并记入指标，便于在准确率回归时定位模型变更。
+
 ## 9. 会话状态与一致性
 
 ### 9.1 Session 状态机
@@ -794,6 +849,28 @@ apps/mobile/src/
 - 401/403（未来启用鉴权）：按认证失效流程处理，不无限重试。
 - App 被杀后恢复：GET session，使用服务端消息重建界面。
 
+### 10.4 按住说话（语音输入）
+
+交互（沿用微信的肌肉记忆，但产物是文本）：
+
+```text
+按下输入框右侧麦克风 → 开始录音，显示时长与电平
+  ├─ 松手            → 停止录音 → 上传转写 → 文本回填输入框 → 用户可改 → 发送
+  ├─ 上滑超过阈值    → 进入“松开取消”状态 → 松手丢弃录音，不发请求
+  └─ 超过 60 秒      → 自动停止并按松手处理
+```
+
+约定：
+
+- 语音是输入方式：转写文本先回填输入框，而不是直接发消息，用户能先修正识别错误再发送。练英语时这是优点，不是妥协。
+- 权限：`RECORD_AUDIO`，首次按下时申请；被拒后给一次性说明并回退到手动输入，不反复弹窗。
+- 录音格式 `m4a`/AAC（`expo-audio` 默认输出），落在 §7.11 的允许格式内，客户端不需要转码。
+- 转写中状态：输入框禁用、显示“识别中”，允许取消；取消要中止上传。
+- 转写失败（504 / 502 / 422）：把录音文件留在本地缓存，提示“重录”或“重试”；重试上传同一文件，不要求用户重录。
+- 发送失败：复用 §10.3 的重试规则与同一个 `client_message_id`，录音与文本草稿一并保留。
+- 本地只保留最近一条自定义录音，发送成功后删除；转写文本的持久化只走服务端。
+- 上传前先按 §7.11 的上限校验时长与体积，超限本地直接提示，省一次必然失败的往返。
+
 ## 11. 配置、密钥与环境
 
 ### 11.1 Backend 环境变量
@@ -809,6 +886,12 @@ AI_PROVIDER=mock
 AI_API_KEY=
 AI_MODEL=
 AI_TIMEOUT_SECONDS=30
+SPEECH_PROVIDER=faster_whisper
+SPEECH_MODEL=distil-large-v3
+SPEECH_DEVICE=auto
+SPEECH_TIMEOUT_SECONDS=60
+MAX_AUDIO_SECONDS=60
+MAX_AUDIO_MB=10
 MAX_USER_MESSAGE_CHARS=4000
 MAX_CONTEXT_MESSAGES=24
 LOG_LEVEL=INFO
@@ -831,7 +914,7 @@ EXPO_PUBLIC_API_BASE_URL=http://10.0.2.2:8000/api/v1
 - 上线前实现 Auth；每条用户私有资源查询均使用 `current_user.id` 作为条件，不信任客户端传来的 user_id。
 - AI API key 仅存在后端；错误日志须过滤 Authorization、API key、连接串。
 - 用户输入、Prompt 和 AI 输出均是不可信内容；渲染时做文本安全处理，不执行 HTML/脚本。
-- 初版不保存音频；未来启用需单独记录用户同意并提供撤回/删除路径。
+- 初版不保存音频。语音迭代上传的音频仅用于一次转写，在响应返回前删除，不落库、不进日志（§7.11）；将来若要保存音频，需单独记录用户同意并提供撤回/删除路径。
 - 用户可删除练习历史和账户数据；保留期限与备份中的删除时限需在上线前写入隐私说明。
 - AI 生成内容标识为训练模拟，不声称代表指定公司的内部流程或官方面试题。
 
@@ -846,6 +929,8 @@ ai_provider, ai_model, prompt_version
 ```
 
 默认不记录完整 transcript 和原始音频。调试个人数据时应显式启用本地 debug logging，且不得用于生产。
+
+语音转写只记录 `audio_duration_ms`、`transcript_provider`、`transcript_model` 与结果状态；不记录音频内容，也不记录转写全文。
 
 ### 13.2 超时与重试
 
@@ -876,6 +961,9 @@ ai_provider, ai_model, prompt_version
 8. 越权访问返回统一 404。
 9. AI 输出缺字段或引用非用户原话时不作为有效评价保存。
 10. Alembic 从空数据库迁移成功。
+11. 转写端点只返回文本：不创建消息、不改变 session 状态、不推进 turn_count。
+12. 超过时长/体积上限的音频返回 413；不支持的格式返回 415；无有效语音返回 422 而不是空文本。
+13. 转写失败不影响会话：同一段音频可重试，会话仍可继续发送文本。
 
 ### 14.3 本地质量命令（项目初始化后固定）
 
@@ -924,6 +1012,7 @@ PyCharm local FastAPI
 Docker PostgreSQL
           ↓
 External AI Provider (optional; local Fake Provider for tests)
+Local Speech Provider / faster-whisper (optional; FakeSpeechProvider in tests)
 ```
 
 部署前置条件：Auth、HTTPS、数据库托管与备份、密钥管理、迁移流程、隐私说明、错误监控、成本限额。MVP 阶段不定义具体云厂商，以免在用户验证前引入额外成本/锁定。
@@ -957,7 +1046,7 @@ External AI Provider (optional; local Fake Provider for tests)
 
 ### Phase 5 — 个人真实使用与语音试验
 
-交付：首批人工审校场景、练习体验记录、录音/转写技术 spike（不默认保存音频）。
+交付：首批人工审校场景、练习体验记录、按住说话语音输入（§7.11 / §8.6 / §10.4）、转写速度与准确率实测（不保存音频）。
 验收：按实际连续使用结果调整 Rubric、场景质量和反馈长度；再决定实时语音与多人测试用户。
 
 ## 18. ADR（架构决策记录）待建事项
@@ -966,7 +1055,7 @@ External AI Provider (optional; local Fake Provider for tests)
 
 - ADR-001：个人 MVP 的认证边界与公网部署条件。
 - ADR-002：LLM / Speech Provider、数据区域与成本上限。
-- ADR-003：录音是否上传/保存、保留时长和删除机制。
+- ADR-003：录音是否上传/保存、保留时长和删除机制。（本版已定：上传仅用于单次转写、不保存；将来若要保存，须先补本 ADR。）
 - ADR-004：英语评价 Rubric 与人工校准方案。
 - ADR-005：同步评价升级为持久任务队列的触发条件。
 
@@ -979,8 +1068,8 @@ External AI Provider (optional; local Fake Provider for tests)
 3. 首批 10 个左右高质量场景的清单及人工校对责任。
 4. 英语评价使用三档描述还是其他等级；各维度的明确定义。
 5. 文本 transcript 的保留/删除方式。
-6. 语音试验使用设备本地转写还是服务端转写，以及数据处理地区。
+6. ~~语音试验使用设备本地转写还是服务端转写~~ —— **已定（2026-10-02）**：服务端转写，本机 faster-whisper，音频不出本机且仅用于单次转写。若将来改用云 STT，须先补 ADR-002（数据区域与成本上限）。
 
 ---
 
-**文档状态说明：** 本版足以启动后端工程骨架、数据库 Schema、REST API 和文本 Roleplay 的实现。标记为“待决”的认证、语音、成本与评分校准事项不得被当作已完成设计；实现者应在对应功能开发前更新本文或补充 ADR。
+**文档状态说明：** 本版足以启动后端工程骨架、数据库 Schema、REST API、文本 Roleplay 与语音输入（§7.11 / §8.6 / §10.4）的实现。语音的转写位置、音频保留与接口契约已定；仍标记为“待决”的认证、成本与评分校准事项不得被当作已完成设计，实现者应在对应功能开发前更新本文或补充 ADR。
