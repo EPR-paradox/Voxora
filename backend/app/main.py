@@ -6,12 +6,19 @@ from fastapi import Depends, FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.api.deps import get_database_health
+from app.ai.roleplay import FakeRoleplayProvider
+from app.api.deps import PracticeAccessError, get_database_health
+from app.api.errors import error_response
+from app.api.practice import router as practice_router
 from app.api.scenarios import router as scenarios_router
 from app.core.config import settings
 
 
 def create_app(database_url: str | None = None) -> FastAPI:
+    if settings.app_env != "local":
+        raise RuntimeError(
+            "Voxora MVP requires local mode until full user authentication is implemented."
+        )
     resolved_database_url = database_url or settings.database_url
 
     @asynccontextmanager
@@ -25,7 +32,20 @@ def create_app(database_url: str | None = None) -> FastAPI:
             await engine.dispose()
 
     app = FastAPI(title="Voxora API", version=settings.app_version, lifespan=lifespan)
+    app.state.roleplay_provider = FakeRoleplayProvider()
     app.include_router(scenarios_router)
+    app.include_router(practice_router)
+
+    @app.exception_handler(PracticeAccessError)
+    async def handle_practice_access_error(
+        request: Request, exc: PracticeAccessError
+    ) -> JSONResponse:
+        return error_response(
+            request,
+            status_code=exc.status_code,
+            code=exc.code,
+            message=exc.message,
+        )
 
     @app.middleware("http")
     async def add_request_id(request: Request, call_next) -> Response:

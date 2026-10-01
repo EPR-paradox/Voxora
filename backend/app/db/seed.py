@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.config import settings
-from app.db.models import Scenario
+from app.db.models import Scenario, User
 
 SCENARIO_SEEDS: list[dict[str, Any]] = [
     {
@@ -77,12 +77,26 @@ async def seed_scenarios(session: AsyncSession) -> None:
     await session.flush()
 
 
+async def seed_local_user(session: AsyncSession) -> None:
+    user = await session.get(User, settings.local_user_id)
+    if user is None:
+        session.add(
+            User(
+                id=settings.local_user_id,
+                display_name="Local User",
+                status="active",
+            )
+        )
+    await session.flush()
+
+
 async def main() -> None:
     engine = create_async_engine(settings.database_url, pool_pre_ping=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     try:
         async with session_factory() as session:
             async with session.begin():
+                await seed_local_user(session)
                 await seed_scenarios(session)
     finally:
         await engine.dispose()
