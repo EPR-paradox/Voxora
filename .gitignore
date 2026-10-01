@@ -1,0 +1,24 @@
+# Python virtual environments and caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Environment files and secrets
+.env
+.env.*
+!.env.example
+
+# IDE and local state
+.idea/
+.vscode/
+
+# OS and temporary files
+.DS_Store
+Thumbs.db
+*.tmp
+*.log
+.~lock.*#
