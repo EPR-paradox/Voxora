@@ -3,19 +3,14 @@
 Deliberate choices:
 
 - **The model loads on first use, not at import.** A few hundred megabytes of weights and a CUDA
-context
-  have no business in the way of `pytest`, and the API must start even when nobody has spoken into
-  it yet.
+  context have no business in the way of `pytest`, and the API must start even when nobody has
+  spoken into it yet.
 - **Decoding runs in a thread.** ``WhisperModel.transcribe`` returns a generator that does the work
-while
-  being iterated; on the event loop that would freeze every other request for the length of the
-  clip.
+  while being iterated; on the event loop that would freeze every other request for a whole clip.
 - **No VAD, no streaming** (§10.4): one clip in, one whole transcript out.
-- **Silence is a failure, not empty text.** Whisper happily invents "Thank you." on a silent
-  clip, so segments the model marks as probably-not-speech are dropped, and a clip that leaves
-  nothing is reported as ``SpeechNotRecognized`` -> HTTP 422 (§7.11 rule 4), never empty text.
-  reported as ``SpeechNotRecognized`` -> HTTP 422 (§7.11 rule 4) instead of producing an empty
-  message.
+- **Silence is a failure, not empty text.** Whisper happily invents "Thank you." on a silent clip,
+  so segments the model marks as probably-not-speech are dropped, and a clip that leaves nothing is
+  reported as ``SpeechNotRecognized`` -> HTTP 422 (§7.11 rule 4), never as empty text.
 """
 
 from __future__ import annotations
@@ -30,9 +25,16 @@ from app.core.config import Settings
 
 logger = logging.getLogger(__name__)
 
-# : Segments the model is this sure contain no speech are dropped (Whisper's own no-speech
-# probability).
+#: Segments the model is this sure contain no speech are dropped (Whisper's no-speech probability).
 NO_SPEECH_PROBABILITY_CUTOFF = 0.6
+
+#: CTranslate2 reports CUDA support from its own build flags, not from the machine: it constructs a
+#: CUDA model happily and only fails at the first encode when libcublas or libcudnn are missing.
+CUDA_LIBRARY_MARKERS = ("libcublas", "libcudnn", "libcufft", "libcurand", "cannot be loaded")
+
+
+class CudaRuntimeFailure(RuntimeError):
+    """The CUDA path cannot actually run; the caller retries the clip on the CPU."""
 
 
 class FasterWhisperSpeechProvider:
@@ -50,6 +52,7 @@ class FasterWhisperSpeechProvider:
         self._compute_type = compute_type
         self._timeout_seconds = timeout_seconds
         self._model: Any | None = None
+        self._using_cuda = False
         self._load_lock = asyncio.Lock()
 
     async def transcribe(
@@ -57,19 +60,14 @@ class FasterWhisperSpeechProvider:
     ) -> TranscriptResult:
         model = await self._load_model()
         try:
-            return await asyncio.wait_for(
-                asyncio.to_thread(self._decode, model, audio, language),
-                timeout=self._timeout_seconds,
-            )
-        except asyncio.TimeoutError as exc:
-            # Python 3.10's asyncio.TimeoutError is not the builtin: the service maps TimeoutError
-            # to
-            # HTTP 504, so translate it here rather than leaking a 500.
-            raise TimeoutError("Transcription timed out.") from exc
-        except SpeechProviderError:
-            raise
-        except Exception as exc:  # noqa: BLE001 - decoded audio can fail in many ways
-            raise SpeechProviderError(f"Transcription failed: {exc}") from exc
+            return await self._run(model, audio, language)
+        except CudaRuntimeFailure as exc:
+            # Measured here: with SPEECH_DEVICE=auto, CTranslate2 advertises CUDA, the model loads,
+            # and then every encode dies on `libcublas.so.12 is not found`. Rebuilding on the CPU
+            # turns "every clip fails" into "one clip is slow".
+            logger.warning("CUDA inference failed (%s); rebuilding the model on the CPU", exc)
+            model = await self._reload_on_cpu()
+            return await self._run(model, audio, language)
 
     async def aclose(self) -> None:
         """Nothing to close: the model holds memory, not a connection.
@@ -81,6 +79,27 @@ class FasterWhisperSpeechProvider:
     def model_is_loaded(self) -> bool:
         return self._model is not None
 
+    def using_cuda(self) -> bool:
+        """True when the loaded model really runs on the GPU (not merely asked to)."""
+        return self._using_cuda
+
+    async def _run(self, model: Any, audio: bytes, language: str) -> TranscriptResult:
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(self._decode, model, audio, language),
+                timeout=self._timeout_seconds,
+            )
+        except asyncio.TimeoutError as exc:
+            # Python 3.10's asyncio.TimeoutError is not the builtin: the service maps TimeoutError
+            # to HTTP 504, so translate it here rather than leaking a 500.
+            raise TimeoutError("Transcription timed out.") from exc
+        except SpeechProviderError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - decoding can fail in many ways
+            if self._using_cuda and _looks_like_missing_cuda_library(exc):
+                raise CudaRuntimeFailure(str(exc)) from exc
+            raise SpeechProviderError(f"Transcription failed: {exc}") from exc
+
     async def _load_model(self) -> Any:
         if self._model is not None:
             return self._model
@@ -89,10 +108,18 @@ class FasterWhisperSpeechProvider:
                 self._model = await asyncio.to_thread(self._build_model)
         return self._model
 
+    async def _reload_on_cpu(self) -> Any:
+        async with self._load_lock:
+            self._device = "cpu"
+            self._compute_type = "int8"
+            self._using_cuda = False
+            self._model = await asyncio.to_thread(self._build_model)
+        return self._model
+
     def _build_model(self) -> Any:
         try:
             from faster_whisper import WhisperModel
-        except ImportError as exc:  # pragma: no cover - exercised only in a broken install
+        except ImportError as exc:  # pragma: no cover - only in a broken install
             raise SpeechProviderError(
                 "faster-whisper is not installed; install it or set SPEECH_PROVIDER=mock."
             ) from exc
@@ -105,17 +132,19 @@ class FasterWhisperSpeechProvider:
             compute_type,
         )
         try:
-            return WhisperModel(self.model, device=device, compute_type=compute_type)
+            model = WhisperModel(self.model, device=device, compute_type=compute_type)
         except Exception as exc:  # noqa: BLE001
             if device == "cuda":
-                # A missing cuDNN or an unsupported card must not take transcription down: fall back
-                # to
-                # the CPU path and say so, instead of failing every clip from then on.
+                # A missing cuDNN or an unsupported card must not take transcription down: fall
+                # back to the CPU path and say so, instead of failing every clip from then on.
                 logger.warning("CUDA load failed (%s); falling back to CPU int8", exc)
+                self._using_cuda = False
                 return WhisperModel(self.model, device="cpu", compute_type="int8")
             raise SpeechProviderError(
                 f"Could not load the whisper model {self.model!r}: {exc}"
             ) from exc
+        self._using_cuda = device == "cuda"
+        return model
 
     def _resolve_device(self) -> tuple[str, str]:
         if self._device == "cpu":
@@ -123,7 +152,9 @@ class FasterWhisperSpeechProvider:
             return "cpu", compute_type
         if self._device == "cuda":
             return "cuda", self._compute_type
-        # auto: use the GPU only when CTranslate2 itself says it can, otherwise take the CPU path.
+        # auto: use the GPU when CTranslate2 says it can, otherwise take the CPU path. Its answer is
+        # optimistic (build flags, not installed libraries), which is what the runtime fallback
+        # above is for.
         try:
             import ctranslate2
 
@@ -158,6 +189,11 @@ class FasterWhisperSpeechProvider:
             provider=self.name,
             model=self.model,
         )
+
+
+def _looks_like_missing_cuda_library(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return any(marker in text for marker in CUDA_LIBRARY_MARKERS)
 
 
 def build_speech_provider(settings: Settings):
