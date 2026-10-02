@@ -344,4 +344,7 @@ small.en + CPU int8（i5-10300H 8 线程）：
 
 - 语音输出（TTS）：每个与会者一个音色 + 播放队列 + 开麦时停播 + 「输出音频是否缓存」的隐私决策。
 - 真机验收：开麦、300 秒上限、中断、会议自动发送都还没在真机上跑过。
-- GPU 路径实测（等 CUDA 库下载完成）。
+- GPU 路径：**决定不做**。CPU（small.en / int8）已 11.6x 实时，300 秒音频 27 秒转完；CUDA 要多装 1.2 GB
+  运行库，且 CTranslate2 会谎报可用性（见上）。本机 `SPEECH_DEVICE=cpu` 钉死，换大模型时再评估。
+- 注：`.venv/bin/pip` 在这个 venv 里存在但曾报 `No such file or directory`（某个后台进程），装包一律用
+  `.venv/bin/python -m pip`，别依赖 `pip` 脚本。
