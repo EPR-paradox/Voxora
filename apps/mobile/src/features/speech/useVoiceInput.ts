@@ -97,7 +97,8 @@ export function useVoiceInput(onText: (text: string) => void): VoiceInput {
           // The learner cancelled: not an error, and not something to offer a retry for.
           setFailedClip(null);
         } else {
-          // Keep the clip: §10.4 wants "重试" to re-upload the same audio, not a new take.
+          // Keep the clip: §10.4 wants "重试" to re-upload the same audio, not a new take. This one
+          // stays a warning: a transcription that failed is worth noticing in the dev log.
           console.warn("[voice] transcription failed", caught);
           setFailedClip(clip);
           setError(describeError(caught));
@@ -131,9 +132,9 @@ export function useVoiceInput(onText: (text: string) => void): VoiceInput {
     }
     const normalized = normalizeClipUri(uri);
     const size = clipSize(normalized);
-    // Metro prints this in the dev server's log, which is where a phone-only failure has to be diagnosed
-    // from: the phone's own console is not reachable.
-    console.warn(`[voice] clip ${normalized} (${size ?? "unknown"} bytes)`);
+    // A plain log, not a warning: Metro prints it in the dev server's log, which is the only console a
+    // phone has, but a warning banner on every recording is noise the learner has to dismiss.
+    console.log(`[voice] clip ${normalized} (${size ?? "unknown"} bytes)`);
     if (size === 0) {
       setPhaseBoth("idle");
       setError("录音文件是空的，再说一次试试。");
