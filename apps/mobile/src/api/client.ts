@@ -18,6 +18,13 @@ const DEFAULT_TIMEOUT_MS = 30_000;
  */
 export const MODEL_CALL_TIMEOUT_MS = 120_000;
 
+/**
+ * Transcription waits for a whole clip to be decoded (§8.6: minutes on the CPU fallback path). The
+ * client must outlive the server's own SPEECH_TIMEOUT_SECONDS (180 s), otherwise it aborts an upload
+ * whose answer is about to arrive and the learner sees a client-side timeout instead of the server's.
+ */
+export const TRANSCRIPTION_TIMEOUT_MS = 240_000;
+
 function defaultBaseUrl(): string {
   const configured = process.env.EXPO_PUBLIC_API_BASE_URL;
   if (configured) return configured.replace(/\/+$/, "");
@@ -46,22 +53,67 @@ export interface RequestOptions {
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const { method = "GET", body, timeoutMs = DEFAULT_TIMEOUT_MS } = options;
 
+  const response = await withTimeout(
+    timeoutMs,
+    (signal) =>
+      fetch(`${API_BASE_URL}${path}`, {
+        method,
+        headers: buildHeaders(body),
+        body: body === undefined ? undefined : JSON.stringify(body),
+        signal,
+      }),
+  );
+  return unwrap<T>(response);
+}
+
+/**
+ * Multipart upload (voice input, §7.11). Same envelope and token handling as `apiRequest`; the
+ * Content-Type header is deliberately left off so `fetch` can set the multipart boundary itself — a
+ * hand-written `Content-Type: multipart/form-data` breaks the upload.
+ */
+export async function apiUpload<T>(
+  path: string,
+  form: FormData,
+  options: { timeoutMs?: number; signal?: AbortSignal } = {},
+): Promise<T> {
+  const { timeoutMs = TRANSCRIPTION_TIMEOUT_MS, signal: externalSignal } = options;
+
+  const response = await withTimeout(
+    timeoutMs,
+    (signal) =>
+      fetch(`${API_BASE_URL}${path}`, {
+        method: "POST",
+        headers: buildUploadHeaders(),
+        body: form,
+        signal,
+      }),
+    externalSignal,
+  );
+  return unwrap<T>(response);
+}
+
+async function withTimeout(
+  timeoutMs: number,
+  send: (signal: AbortSignal) => Promise<Response>,
+  externalSignal?: AbortSignal,
+): Promise<Response> {
   const controller = new AbortController();
   let timedOut = false;
   const timer = setTimeout(() => {
     timedOut = true;
     controller.abort();
   }, timeoutMs);
+  // The screen can cancel an in-flight upload (§10.4: 取消要中止上传), and that must not be reported as a
+  // failed transcription.
+  const forward = () => controller.abort();
+  externalSignal?.addEventListener("abort", forward);
 
-  let response: Response;
   try {
-    response = await fetch(`${API_BASE_URL}${path}`, {
-      method,
-      headers: buildHeaders(body),
-      body: body === undefined ? undefined : JSON.stringify(body),
-      signal: controller.signal,
-    });
+    return await send(controller.signal);
   } catch (error) {
+    if (externalSignal?.aborted) {
+      throw new AbortError();
+    }
     if (timedOut) {
       throw new NetworkError(`请求超过 ${Math.round(timeoutMs / 1000)} 秒没有响应。`, {
         isTimeout: true,
@@ -70,8 +122,19 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
     throw new NetworkError(error instanceof Error ? error.message : "网络请求失败。");
   } finally {
     clearTimeout(timer);
+    externalSignal?.removeEventListener("abort", forward);
   }
+}
 
+/** Thrown when the caller aborted the request on purpose; screens treat it as "cancelled", not "failed". */
+export class AbortError extends Error {
+  constructor() {
+    super("aborted");
+    this.name = "AbortError";
+  }
+}
+
+async function unwrap<T>(response: Response): Promise<T> {
   const raw = await response.text();
   const payload: unknown = raw ? safeJsonParse(raw) : null;
 
@@ -87,6 +150,10 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
   }
 
   return payload as T;
+}
+
+function buildUploadHeaders(): Record<string, string> | undefined {
+  return ACCESS_TOKEN ? { Authorization: `Bearer ${ACCESS_TOKEN}` } : undefined;
 }
 
 function buildHeaders(body: unknown): Record<string, string> | undefined {

@@ -19,6 +19,7 @@ import { newClientMessageId } from "../../src/api/client";
 import { ApiError, describeError } from "../../src/api/errors";
 import { finishSession } from "../../src/features/evaluation/api";
 import { getSession, sendMessage } from "../../src/features/practice/api";
+import { formatDuration, useVoiceInput } from "../../src/features/speech/useVoiceInput";
 import { colors, radius, spacing, speakerColor, typography } from "../../src/theme";
 
 interface OutboxItem {
@@ -103,6 +104,9 @@ export default function PracticeScreen() {
 
   const messages = sessionQuery.data?.messages ?? [];
   const session = sessionQuery.data;
+  // Meeting mode: more than one participant in the room (§7.7). Read here because the voice callback
+  // below needs it, and the screens' early returns come later.
+  const inMeeting = (session?.participants.length ?? 0) > 1;
 
   // A meeting puts several participants in one turn, so every row carries who said it and whether it
   // starts a new speaker run. Consecutive lines from one person are drawn as a group; otherwise three
@@ -134,6 +138,26 @@ export default function PracticeScreen() {
       startsSpeaker: index === 0 || all[index - 1].speakerKey !== row.speakerKey,
     }));
   }, [messages, outbox]);
+
+  // Voice input (design §10.4). What the finished text does depends on the room: a meeting sends it
+  // straight away, a single-character practice drops it into the box so a mis-heard word can be fixed
+  // before it becomes learner history.
+  const voice = useVoiceInput(
+    useCallback(
+      (text: string) => {
+        const spoken = text.trim();
+        if (!spoken || send.isPending) return;
+        if (inMeeting) {
+          const item: OutboxItem = { clientMessageId: newClientMessageId(), content: spoken, failed: false };
+          setOutbox((items) => [...items, item]);
+          send.mutate(item);
+          return;
+        }
+        setDraft((current) => (current ? `${current} ${spoken}` : spoken));
+      },
+      [inMeeting, send],
+    ),
+  );
 
   if (sessionQuery.isPending) {
     return (
@@ -237,22 +261,78 @@ export default function PracticeScreen() {
         </View>
       ) : (
         <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined}>
+          {voice.phase === "recording" ? (
+            <View style={styles.recordingStrip}>
+              <View style={styles.recordingDot} />
+              <View style={styles.levelTrack}>
+                <View style={[styles.levelFill, { width: `${Math.round(voice.level * 100)}%` }]} />
+              </View>
+              <Text style={[styles.recordingTime, voice.endingSoon && styles.recordingTimeWarn]}>
+                {formatDuration(voice.elapsedMs)}
+              </Text>
+            </View>
+          ) : null}
+
+          {voice.phase === "transcribing" ? (
+            <View style={styles.voiceStrip}>
+              <Text style={styles.voiceStripText}>识别中…</Text>
+              <Pressable onPress={voice.cancel}>
+                <Text style={styles.linkLabel}>取消</Text>
+              </Pressable>
+            </View>
+          ) : null}
+
+          {voice.error ? (
+            <View style={styles.voiceStrip}>
+              <Text style={styles.voiceErrorText}>{voice.error}</Text>
+              <Pressable onPress={voice.retry}>
+                <Text style={styles.linkLabel}>重试同一段</Text>
+              </Pressable>
+              <Pressable onPress={voice.cancel}>
+                <Text style={styles.linkLabel}>重新录</Text>
+              </Pressable>
+            </View>
+          ) : null}
+
+          {voice.permissionDenied ? (
+            <Text style={styles.voiceHint}>
+              没有麦克风权限。先用打字，需要开麦就去系统设置里允许。
+            </Text>
+          ) : null}
+
           <View style={[styles.composer, { paddingBottom: insets.bottom + spacing.sm }]}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={voice.phase === "recording" ? "闭麦并识别" : "开麦"}
+              onPress={voice.toggle}
+              disabled={send.isPending || voice.phase === "transcribing"}
+              style={({ pressed }) => [
+                styles.mic,
+                voice.phase === "recording" && styles.micActive,
+                pressed && styles.pressed,
+              ]}
+            >
+              <Text
+                style={[styles.micLabel, voice.phase === "recording" && styles.micLabelActive]}
+              >
+                {voice.phase === "recording" ? "闭麦" : "开麦"}
+              </Text>
+            </Pressable>
             <TextInput
               style={styles.input}
               value={draft}
               onChangeText={setDraft}
-              placeholder="用英语回答…"
+              placeholder={inMeeting ? "说一句，或直接打字…" : "用英语回答…"}
               placeholderTextColor={colors.textMuted}
               multiline
-              editable={!send.isPending}
+              editable={!send.isPending && voice.phase === "idle"}
               onSubmitEditing={submit}
               blurOnSubmit={false}
             />
             <AppButton
               label="发送"
               busy={send.isPending}
-              disabled={draft.trim().length === 0}
+              disabled={draft.trim().length === 0 || voice.phase !== "idle"}
               onPress={submit}
             />
           </View>
@@ -310,6 +390,56 @@ const styles = StyleSheet.create({
     ...typography.body,
   },
   footerBar: { padding: spacing.lg },
+  mic: {
+    minHeight: 44,
+    paddingHorizontal: spacing.md,
+    justifyContent: "center",
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceMuted,
+  },
+  micActive: { borderColor: colors.danger, backgroundColor: colors.surface },
+  micLabel: { ...typography.label, color: colors.text },
+  micLabelActive: { color: colors.danger },
+  // The recording state has to be visible from across the room: red dot, live level, running clock.
+  recordingStrip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    backgroundColor: colors.surface,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  recordingDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: colors.danger },
+  levelTrack: {
+    flex: 1,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: colors.surfaceMuted,
+    overflow: "hidden",
+  },
+  levelFill: { height: 6, borderRadius: 3, backgroundColor: colors.danger },
+  recordingTime: { ...typography.caption, color: colors.text },
+  recordingTimeWarn: { color: colors.warning, fontWeight: "700" },
+  voiceStrip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+  },
+  voiceStripText: { ...typography.caption, color: colors.textMuted },
+  voiceErrorText: { flex: 1, ...typography.caption, color: colors.danger },
+  voiceHint: {
+    ...typography.caption,
+    color: colors.textMuted,
+    paddingHorizontal: spacing.lg,
+    paddingBottom: spacing.sm,
+  },
+  linkLabel: { ...typography.caption, color: colors.accent, fontWeight: "700" },
   headerAction: { color: colors.accent, fontSize: 15, fontWeight: "600" },
   headerActionDisabled: { color: colors.textMuted },
   pressed: { opacity: 0.7 },

@@ -149,6 +149,15 @@ export interface PracticeSessionListResponse {
   offset: number;
 }
 
+/** What a transcription returns (design §7.11): text plus the metadata §8.6 wants traceable. */
+export interface TranscriptionResponse {
+  text: string;
+  language: string;
+  duration_ms: number | null;
+  provider: string;
+  model: string;
+}
+
 export interface SendPracticeMessageResponse {
   user_message: PracticeMessage;
   /** Always a list: a meeting answers with one turn per participant that speaks (meeting-mode §5). */
