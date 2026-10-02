@@ -1,7 +1,7 @@
 # Voxora 软件设计详细规格
 
 > 产品副标题：English for the semiconductor world  
-> 文档状态：Draft v0.5（开发规格草案）  
+> 文档状态：Draft v0.6（开发规格草案）  
 > 日期：2026-10-02  
 > 产品需求来源：`../semispeak.md`  
 > 本文目标：让开发者可据此创建工程、实现数据库/API/核心流程，并编写验收测试。
@@ -128,6 +128,9 @@ Voxora 面向希望进入或已在半导体国际化企业工作的工程师，�
 - 真机调试时使用开发机局域网 IP，并确保服务监听 `0.0.0.0`；不得将该设置误用于生产部署。
 - PyCharm 本地启动 FastAPI；Docker Compose 初期只启动 PostgreSQL。
 - Expo 开发服务器与 FastAPI 是不同进程；分别观察移动端日志和 PyCharm 后端日志。
+- 浏览器预览（`expo start --web`，默认 8081）与 API 不同源，所以后端在本地模式下放行这几个来源的
+  CORS（白名单 `CORS_ALLOW_ORIGINS`）。真机与模拟器不受浏览器同源策略约束，不需要这一项。
+  白名单只列本地开发来源：一个对 loopback 客户端免 token 的 API 不该被任意网页驱动。
 
 ## 4. 技术栈与工程标准
 
@@ -942,6 +945,10 @@ EXPO_PUBLIC_API_BASE_URL=http://10.0.2.2:8000/api/v1
 ```
 
 `EXPO_PUBLIC_*` 会进入客户端构建，不能放服务端密钥。
+
+未设置时的平台默认值：Android `http://10.0.2.2:8000/api/v1`（模拟器访问宿主机），其余（web 预览、
+iOS 模拟器）`http://127.0.0.1:8000/api/v1`。真机必须在 `apps/mobile/.env.local` 写开发机的局域网 IP，
+并在后端 `.env` 设置 `API_ACCESS_TOKEN`：非 loopback 客户端要带 `Authorization: Bearer <token>`。
 
 ## 12. 安全与隐私
 

@@ -42,6 +42,25 @@ Evaluation has its own budget and timeout (`AI_EVALUATION_TIMEOUT_SECONDS`, `AI_
 
 OpenAPI UI: `http://localhost:8000/docs`.
 
+## Mobile app
+
+```bash
+cd apps/mobile
+npm install
+npm run web        # browser preview on http://localhost:8081
+npm start          # Expo dev server for Expo Go on a phone
+npm run typecheck
+```
+
+Screens live in `app/` (Expo Router) and everything else in `src/` (`api`, `components`, `features`,
+`storage`, `theme`). The client reads `EXPO_PUBLIC_API_BASE_URL`; without it, Android falls back to
+`10.0.2.2:8000` (emulator to host) and everything else to `127.0.0.1:8000`. A physical phone needs the dev
+machine's LAN address in `apps/mobile/.env.local`, and the backend then needs `API_ACCESS_TOKEN` set,
+because requests from non-loopback clients must carry `Authorization: Bearer <token>`.
+
+The browser preview is cross-origin, so the backend allows the Expo dev-server origins through
+`CORS_ALLOW_ORIGINS` (local development origins only).
+
 ## Debugging in PyCharm
 
 Run configuration type **Python** (not the FastAPI template):

@@ -85,6 +85,26 @@
      不评判技术结论（符合 §8.4）。
    - 延迟：单轮 roleplay 1.1–2.2 秒；三轮对话后生成评价 13–15 秒。
 
+## Phase 4 —— Android 客户端
+
+- 工程 `apps/mobile`：Expo SDK 57 + Expo Router + TypeScript + TanStack Query，目录按 §5 / §10.2
+  （`app/` 放路由，`src/{api,components,features,storage,theme}` 放其余）。
+- 页面全部接真实 API，没有静态假数据：Home（继续上次练习 / 开始新练习 / 复习 / 设置）、场景列表
+  （分类筛选）、场景详情（开始练习）、对话（发送、失败重试、结束）、评价（五维 + 原话证据 +
+  加入复习 + 失败重试）、复习列表（状态筛选 + 记住了/没记住）、设置（后端健康 + 本地缓存）。
+- 契约对齐：`src/api/types.ts` 逐字段对应后端 schema，字段名保持 `snake_case`，不做 camelCase 转换
+  —— 中间层只会静默漂移。错误按 §7.12 的 `error.code` 分支，`isRetryable` 决定要不要给重试按钮。
+- 对话页的状态划分：消息列表是服务端状态，只有“还没确认的那一轮”放在本地 outbox。失败保留原文与
+  同一个 `client_message_id`，所以重试不会写出第二条用户消息（§7.6 / §9.3）。
+- **后端补了 CORS**：浏览器预览（8081）与 API（8000）不同源，不加中间件所有请求都会被拦掉，而真机
+  不受影响 —— 这种差异只有浏览器里才看得见。白名单 `CORS_ALLOW_ORIGINS` 只列本地开发来源，
+  3 个测试盯着。
+- 验证到哪一步：`tsc --noEmit` 干净；`expo export --platform web` 打包成功（846 模块）；用 headless
+  Chrome 逐页渲染真实数据并截图核对（首页 / 场景列表 / 场景详情 / 对话 / 评价 / 复习），
+  确认排版正常且数据来自真实 API。
+- **未验证**：Android 模拟器与真机 —— 本机没有 Android SDK / emulator。§1.3 第 6 条的
+  “从 Android Emulator 完成全闭环”要等装了 SDK 或用 Expo Go 真机扫码后才能盖章。
+
 ### 仓库状态
 
 - 仓库已公开：https://github.com/EPR-paradox/Voxora（2026-10-02 设为 public）
