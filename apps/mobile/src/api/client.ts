@@ -29,6 +29,14 @@ function defaultBaseUrl(): string {
 
 export const API_BASE_URL = defaultBaseUrl();
 
+/**
+ * The local API is deliberately token-free for loopback clients but requires a bearer token from
+ * anything else (§3.1) — which is exactly what a phone on the LAN is, so this dev token ships inside
+ * the build. It is the local-development guard, not user authentication, and must not be reused for a
+ * public deployment (see §12).
+ */
+const ACCESS_TOKEN = process.env.EXPO_PUBLIC_API_ACCESS_TOKEN;
+
 export interface RequestOptions {
   method?: "GET" | "POST" | "PATCH";
   body?: unknown;
@@ -49,7 +57,7 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
   try {
     response = await fetch(`${API_BASE_URL}${path}`, {
       method,
-      headers: body === undefined ? undefined : { "Content-Type": "application/json" },
+      headers: buildHeaders(body),
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: controller.signal,
     });
@@ -79,6 +87,13 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
   }
 
   return payload as T;
+}
+
+function buildHeaders(body: unknown): Record<string, string> | undefined {
+  const headers: Record<string, string> = {};
+  if (body !== undefined) headers["Content-Type"] = "application/json";
+  if (ACCESS_TOKEN) headers.Authorization = `Bearer ${ACCESS_TOKEN}`;
+  return Object.keys(headers).length > 0 ? headers : undefined;
 }
 
 function safeJsonParse(raw: string): unknown {
