@@ -5,11 +5,15 @@ from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_db_session
+from app.api.deps import get_db_session, require_practice_access
 from app.schemas import ScenarioDetail, ScenarioListResponse, ScenarioSummary
 from app.services.scenarios import get_published_scenario, list_scenarios
 
-router = APIRouter(prefix="/api/v1/scenarios", tags=["scenarios"])
+router = APIRouter(
+    prefix="/api/v1/scenarios",
+    tags=["scenarios"],
+    dependencies=[Depends(require_practice_access)],
+)
 
 
 @router.get("", response_model=ScenarioListResponse)

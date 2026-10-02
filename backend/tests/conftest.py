@@ -66,6 +66,7 @@ async def build_harness(
     *,
     roleplay_provider: RoleplayProvider | None = None,
     evaluation_provider: EvaluationProvider | None = None,
+    client_address: tuple[str, int] = ("127.0.0.1", 12345),
 ) -> AsyncIterator[ApiHarness]:
     engine = create_async_engine(database_url)
 
@@ -90,7 +91,8 @@ async def build_harness(
         evaluation_provider=evaluation_provider or FakeEvaluationProvider(),
     )
     async with app.router.lifespan_context(app):
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        transport = ASGITransport(app=app, client=client_address)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
             yield ApiHarness(client=client, session_factory=session_factory)
     await engine.dispose()
 
