@@ -348,3 +348,18 @@ small.en + CPU int8（i5-10300H 8 线程）：
   运行库，且 CTranslate2 会谎报可用性（见上）。本机 `SPEECH_DEVICE=cpu` 钉死，换大模型时再评估。
 - 注：`.venv/bin/pip` 在这个 venv 里存在但曾报 `No such file or directory`（某个后台进程），装包一律用
   `.venv/bin/python -m pip`，别依赖 `pip` 脚本。
+
+## 2026-10-02（语音输出 6.6a）：每个角色一个音色
+
+草案 §9 说 TTS 的前置是 `cast[].voice` 落地，先做这块。
+
+- `app/ai/voices.py`：8 个 edge-tts 英文音色（en-US/en-GB/en-IN，男女各半），名字用 `edge_tts.list_voices()`
+  逐个验证过。`resolve_voice(key, taken)` 对 key 做 sha256 取模、跳过已占用的音色 —— **按 key 而非按位置**
+  分配，否则加一个与会者就会把后面所有人的声音换掉。
+- `normalize_cast`：显式音色必须在目录里，否则 `ValueError`（拼错的音色不该等到按下播放才炸）；没给就确定性分配。
+  `scenario_cast()` 读侧遇到 `None` 或已改名音色就地补齐，不因数据旧而让播放失败。旧数据无需迁移。
+- 测试 212 → 216：新增音色稳定性、同房间不共用音色、目录外音色写侧被拒 / 读侧被替换；`test_seed` 改为断言
+  每位与会者都有音色且互不重复。`ruff` 全过。
+- 已定决策写进草案 §9.1/§9.2 与 §10：合成音频**不落盘、不缓存**（与输入音频同一条隐私线，代价是重放重新合成）。
+
+6.6b（edge-tts provider + 端点）与 6.6c（客户端播放队列、开麦即停播）是下一步。

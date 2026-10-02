@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import pytest
 
+from app.ai.voices import VOICE_CATALOG, resolve_voice
 from app.scenario_cast import (
     DEFAULT_CHARACTER_NAME,
     SINGLE_CHARACTER_KEY,
@@ -83,18 +84,47 @@ def test_speaker_index_maps_keys_to_display_fields() -> None:
 def test_normalize_cast_accepts_two_to_three_participants() -> None:
     stored = normalize_cast(
         [
-            {"key": "eng_lead", "name": "Dana", "title": "Engineering Lead", "voice": "en_f_1"},
+            {
+                "key": "eng_lead",
+                "name": "Dana",
+                "title": "Engineering Lead",
+                "voice": VOICE_CATALOG[0],
+            },
             {"key": "pm", "name": "Marco", "personality": "blunt"},
         ]
     )
 
     assert stored is not None
     assert [p["key"] for p in stored] == ["eng_lead", "pm"]
-    # Voice belongs to the speech-output phase, so a value in the input must not be stored as if a
-    # synthesiser existed.
-    assert stored[0]["voice"] is None
+    assert stored[0]["voice"] == VOICE_CATALOG[0]
     assert stored[0]["personality"] == ""
     assert stored[1]["personality"] == "blunt"
+
+
+def test_a_cast_with_no_voices_is_given_distinct_known_ones() -> None:
+    """Playback has to work for a cast written before voices existed (§9 of the meeting draft)."""
+    stored = normalize_cast([{"key": "eng_lead", "name": "Dana"}, {"key": "pm", "name": "Marco"}])
+
+    assert stored is not None
+    voices = [p["voice"] for p in stored]
+    assert all(voice in VOICE_CATALOG for voice in voices)
+    assert len(set(voices)) == 2, "two people in one room must not share a larynx"
+
+
+def test_a_voice_follows_the_key_not_the_position() -> None:
+    """The same character sounds the same tomorrow, whatever else changes around them."""
+    assert resolve_voice("eng_lead") == resolve_voice("eng_lead")
+    # And a second participant is pushed off a voice that is already in the room.
+    assert resolve_voice("pm", {resolve_voice("eng_lead")}) != resolve_voice("eng_lead")
+
+
+def test_an_unknown_stored_voice_is_replaced_rather_than_failing_playback() -> None:
+    """A renamed catalog entry must not become a play button that does nothing."""
+    participants = scenario_cast(
+        {"cast": [{"key": "eng_lead", "name": "Dana", "voice": "en-US-VanishedNeural"}]}
+    )
+
+    assert participants[0]["voice"] in VOICE_CATALOG
 
 
 def test_normalized_cast_survives_a_round_trip() -> None:
@@ -113,6 +143,11 @@ def test_normalize_cast_none_means_single_character_scenario() -> None:
     "cast",
     [
         [{"key": "eng_lead", "name": "Dana"}],  # one participant is not a meeting
+        # A voice nobody can synthesise: rejected at write time, not at playback time.
+        [
+            {"key": "eng_lead", "name": "Dana", "voice": "en-US-VanishedNeural"},
+            {"key": "pm", "name": "M"},
+        ],
         [{"key": f"p{i}", "name": "x"} for i in range(4)],  # four is too many
         [{"key": "Eng Lead", "name": "Dana"}, {"key": "pm", "name": "M"}],  # key is not a slug
         [{"key": "ENG_LEAD", "name": "Dana"}, {"key": "pm", "name": "M"}],  # key must be lowercase

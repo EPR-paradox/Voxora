@@ -12,6 +12,8 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
+from app.ai.voices import is_known_voice, resolve_voice
+
 #: `key` of the single participant a pre-meeting-mode scenario is wrapped into.
 SINGLE_CHARACTER_KEY = "interviewer"
 DEFAULT_CHARACTER_NAME = "Interviewer"
@@ -40,7 +42,7 @@ def scenario_cast(scenario: Mapping[str, Any]) -> list[dict[str, Any]]:
             if isinstance(item, Mapping) and str(item.get("key") or "").strip()
         ]
         if cleaned:
-            return cleaned
+            return _with_voices(cleaned)
     return [_single_character(scenario)]
 
 
@@ -95,9 +97,13 @@ def normalize_cast(cast: Any) -> list[dict[str, Any]] | None:
             entry[field] = value
         if not entry["name"]:
             raise ValueError(f"cast[{key}] needs a name.")
-        # Voice belongs to the speech-output phase (docs/meeting-mode-v0.1.md §9): storing a
-        # value now would imply a synthesiser exists.
-        entry["voice"] = None
+        # Voices land with speech output (docs/meeting-mode-v0.1.md §9). An explicit voice must be
+        # one the synthesiser knows — storing a typo would only surface as a failed playback — and a
+        # cast that names nobody gets stable voices here, so every stored cast can be spoken.
+        voice = item.get("voice")
+        if voice is not None and not is_known_voice(voice):
+            raise ValueError(f"cast[{key}].voice must be a known voice or null.")
+        entry["voice"] = voice or resolve_voice(key, {p["voice"] for p in participants})
         participants.append(entry)
 
     if participants and not MIN_MEETING_CAST <= len(participants) <= MAX_MEETING_CAST:
@@ -117,8 +123,28 @@ def _single_character(scenario: Mapping[str, Any]) -> dict[str, Any]:
         "title": str(character.get("title") or ""),
         "personality": str(character.get("personality") or ""),
         "communication_style": str(character.get("communication_style") or ""),
-        "voice": None,
+        "voice": resolve_voice(SINGLE_CHARACTER_KEY),
     }
+
+
+def _with_voices(cast: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Fill in a voice for every participant, keeping whatever is already stored.
+
+    Scenarios written before voices existed (or hand-edited ones) carry ``None`` or a name from an
+    older catalog: playback has to work for them anyway, so the missing voice is derived here rather
+    than turned into an error at the moment the learner presses play.
+    """
+    taken: set[str] = set()
+    resolved: list[dict[str, Any]] = []
+    for participant in cast:
+        entry = dict(participant)
+        voice = entry.get("voice")
+        if not is_known_voice(voice):
+            voice = resolve_voice(str(entry.get("key") or ""), taken)
+        entry["voice"] = voice
+        taken.add(voice)
+        resolved.append(entry)
+    return resolved
 
 
 __all__ = [

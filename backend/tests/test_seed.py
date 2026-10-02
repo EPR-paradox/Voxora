@@ -2,6 +2,7 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from app.ai.voices import VOICE_CATALOG
 from app.core.config import settings
 from app.db.base import Base
 from app.db.models import Scenario, User
@@ -74,7 +75,11 @@ async def test_seeded_meetings_get_a_validated_cast_and_a_display_name(tmp_path)
         assert meeting.cast is not None
         assert [participant["key"] for participant in meeting.cast] == ["eng_lead", "pm", "qa"]
         # Voice belongs to the speech-output phase; the seed must not pretend otherwise.
-        assert all(participant["voice"] is None for participant in meeting.cast)
+        # Voices landed with speech output (docs/meeting-mode-v0.1.md §9): every participant is
+        # speakable, and nobody in the room shares a voice with someone else.
+        voices = [participant["voice"] for participant in meeting.cast]
+        assert all(voice in VOICE_CATALOG for voice in voices)
+        assert len(set(voices)) == len(voices)
         # ai_character is NOT NULL and predates meeting mode, so it stays populated.
         assert meeting.ai_character["name"] == "Dana Whitfield"
         assert len(scenario_cast({"cast": meeting.cast})) == 3
