@@ -12,7 +12,18 @@ class Settings(BaseSettings):
     local_user_id: UUID = UUID("10000000-0000-4000-8000-000000000001")
     api_access_token: SecretStr | None = None
     max_user_message_chars: int = 4000
+    max_context_messages: int = 24
     log_level: str = "INFO"
+
+    # Roleplay provider. ``mock`` keeps tests and offline development free of external
+    # calls; ``openai_compatible`` targets any /chat/completions endpoint (DeepSeek by
+    # default, other vendors by changing ``ai_base_url`` and ``ai_model``).
+    ai_provider: str = "mock"
+    ai_base_url: str = "https://api.deepseek.com/v1"
+    ai_api_key: SecretStr | None = None
+    ai_model: str = ""
+    ai_timeout_seconds: float = 30.0
+    ai_max_tokens: int = 400
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

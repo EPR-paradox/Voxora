@@ -23,7 +23,10 @@ async def get_database_health(request: Request) -> str:
     try:
         async with engine.connect() as connection:
             await connection.exec_driver_sql("SELECT 1")
-    except SQLAlchemyError:
+    except (SQLAlchemyError, OSError):
+        # SQLAlchemy does not wrap driver-level connect failures: asyncpg raises a bare
+        # ConnectionRefusedError (an OSError) when the server is down. Catching only
+        # SQLAlchemyError lets that escape as HTTP 500 instead of the 503 contract.
         return "unavailable"
     return "ok"
 

@@ -29,9 +29,25 @@ The PostgreSQL credentials in `.env.example` are development-only. Practice API 
 - `POST /api/v1/practice/sessions/{session_id}/messages` — sends a text turn with idempotent retry handling.
 - `GET /api/v1/practice/sessions/{session_id}` — restores session state and its message history.
 
-Roleplay currently uses a deterministic fake provider; no external AI API is called yet. The provider interface is ready for a real adapter.
+Roleplay runs on a pluggable provider chosen by `AI_PROVIDER`:
+
+- `mock` (default) — deterministic `FakeRoleplayProvider`; tests and offline development never call an external API.
+- `openai_compatible` — real calls to any `/chat/completions` endpoint (DeepSeek by default; point `AI_BASE_URL`/`AI_MODEL` at another vendor). Startup fails fast when `AI_MODEL` or `AI_API_KEY` is missing, and the system prompt is built from the scenario snapshot without `target_expressions`/`evaluation_rubric`, so the roleplay partner never sees what the learner is graded on.
 
 OpenAPI UI: `http://localhost:8000/docs`.
+
+## Debugging in PyCharm
+
+Run configuration type **Python** (not the FastAPI template):
+
+- **Module name**: `uvicorn`
+- **Parameters**: `app.main:app --host 127.0.0.1 --port 8000`
+- **Working directory**: `backend/` — `settings` reads `.env` relative to the working directory, so a different cwd silently falls back to defaults
+- **Interpreter**: the project venv
+
+Do not add `--reload` while debugging: the reloader forks a child process and the debugger only stays attached to the parent, so breakpoints never fire.
+
+For logic-level debugging, use a **pytest** run configuration instead. The test suite runs entirely on temporary SQLite databases, so no PostgreSQL is needed; breakpoints in `app/services/` and `app/api/` work out of the box.
 
 ## Development checks
 

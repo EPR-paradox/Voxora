@@ -6,6 +6,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from app.ai.roleplay import FakeRoleplayProvider
 from app.core.config import settings
 from app.db.base import Base
 from app.db.models import Scenario, User
@@ -51,7 +52,7 @@ async def practice_client(tmp_path) -> AsyncIterator[AsyncClient]:
         session.add(scenario)
         await session.commit()
 
-    app = create_app(database_url=database_url)
+    app = create_app(database_url=database_url, roleplay_provider=FakeRoleplayProvider())
     async with app.router.lifespan_context(app):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             yield client

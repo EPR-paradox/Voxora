@@ -3,6 +3,7 @@ from uuid import UUID
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from app.ai.roleplay import FakeRoleplayProvider
 from app.api.deps import get_database_health
 from app.main import create_app
 
@@ -57,3 +58,24 @@ async def test_health_replaces_invalid_request_id() -> None:
 
     request_id = response.headers["x-request-id"]
     assert request_id == str(UUID(request_id))
+
+
+class RefusingEngine:
+    """An engine whose driver raises a bare ``OSError`` on connect, like asyncpg does."""
+
+    def connect(self):
+        raise ConnectionRefusedError(111, "Connection refused")
+
+
+@pytest.mark.asyncio
+async def test_health_reports_service_unavailable_on_driver_level_connect_failure() -> None:
+    # Regression: SQLAlchemy does not wrap driver connect failures, so catching only
+    # SQLAlchemyError turned an unreachable database into HTTP 500 instead of 503.
+    app = create_app(database_url="sqlite+aiosqlite://", roleplay_provider=FakeRoleplayProvider())
+    async with app.router.lifespan_context(app):
+        app.state.database_engine = RefusingEngine()
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get("/api/v1/health")
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "service_unavailable"
