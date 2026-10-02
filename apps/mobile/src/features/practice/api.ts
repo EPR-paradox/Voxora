@@ -1,5 +1,6 @@
 import { apiRequest, MODEL_CALL_TIMEOUT_MS, newClientMessageId, toQueryString } from "../../api/client";
 import type {
+  AdvanceMeetingResponse,
   PracticeSessionCreated,
   PracticeSessionDetail,
   PracticeSessionListResponse,
@@ -52,3 +53,17 @@ export function sendMessage(
 }
 
 export { newClientMessageId };
+
+/**
+ * Let the meeting continue without speaking (design §7.14).
+ *
+ * `afterSeq` is the display position the client has already seen — the same value twice returns the turns
+ * that are already written instead of buying a second round, so a retry after a timeout is safe.
+ */
+export function advanceMeeting(sessionId: string, afterSeq: number): Promise<AdvanceMeetingResponse> {
+  return apiRequest<AdvanceMeetingResponse>(`/practice/sessions/${sessionId}/advance`, {
+    method: "POST",
+    body: { after_seq: afterSeq },
+    timeoutMs: MODEL_CALL_TIMEOUT_MS,
+  });
+}

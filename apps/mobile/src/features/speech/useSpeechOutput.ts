@@ -32,6 +32,13 @@ export interface SpeechLine {
 export interface SpeechOutput {
   /** Id of the message currently being spoken, if any. */
   playingId: string | null;
+  /**
+   * True from the moment a line starts being synthesised until the queue is empty.
+   *
+   * The listening loop waits on this: a meeting that keeps advancing while the audio is still on an earlier
+   * line reads as a transcript racing its own soundtrack, and in listening mode the sound *is* the content.
+   */
+  busy: boolean;
   muted: boolean;
   error: string | null;
   setMuted: (muted: boolean) => void;
@@ -45,6 +52,7 @@ export interface SpeechOutput {
 
 export function useSpeechOutput(): SpeechOutput {
   const [playingId, setPlayingId] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   const [muted, setMutedState] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -101,6 +109,7 @@ export function useSpeechOutput(): SpeechOutput {
   const drain = useCallback(async () => {
     if (drainingRef.current) return;
     drainingRef.current = true;
+    setBusy(true);
     try {
       // Speech, not music: it must be audible with the silent switch on, and it should duck other audio
       // rather than fight it. Failures here (web, odd Android builds) must not stop playback.
@@ -135,6 +144,7 @@ export function useSpeechOutput(): SpeechOutput {
     } finally {
       drainingRef.current = false;
       setPlayingId(null);
+      setBusy(false);
     }
   }, [playToEnd]);
 
@@ -185,5 +195,5 @@ export function useSpeechOutput(): SpeechOutput {
     [stop],
   );
 
-  return { playingId, muted, error, setMuted, speak, replay, stop };
+  return { playingId, busy, muted, error, setMuted, speak, replay, stop };
 }

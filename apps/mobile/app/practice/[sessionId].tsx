@@ -19,6 +19,7 @@ import { newClientMessageId } from "../../src/api/client";
 import { ApiError, describeError } from "../../src/api/errors";
 import { finishSession } from "../../src/features/evaluation/api";
 import { getSession, sendMessage } from "../../src/features/practice/api";
+import { useMeetingListening } from "../../src/features/practice/useMeetingListening";
 import { useSpeechOutput, type SpeechLine } from "../../src/features/speech/useSpeechOutput";
 import { formatDuration, useVoiceInput } from "../../src/features/speech/useVoiceInput";
 import { colors, radius, spacing, speakerColor, typography } from "../../src/theme";
@@ -86,6 +87,7 @@ export default function PracticeScreen() {
     const content = draft.trim();
     if (!content || send.isPending) return;
     const item: OutboxItem = { clientMessageId: newClientMessageId(), content, failed: false };
+    stopListeningRef.current();
     setOutbox((items) => [...items, item]);
     setDraft("");
     send.mutate(item);
@@ -164,6 +166,24 @@ export default function PracticeScreen() {
   // Voice output (meeting-mode §9). Every participant speaks with the voice the server picked for them,
   // so the client never keeps its own copy of the catalog.
   const speech = useSpeechOutput();
+
+  // Listening without speaking (design §7.14). The cursor is the last seq the screen has seen: it is what
+  // makes a retried advance free, and it has to be read at call time, never captured.
+  const cursorRef = useRef(0);
+  useEffect(() => {
+    cursorRef.current = messages.reduce(
+      (highest, message) => Math.max(highest, message.seq),
+      cursorRef.current,
+    );
+  }, [messages]);
+  const speechBusyRef = useRef(speech.busy);
+  speechBusyRef.current = speech.busy;
+  const listening = useMeetingListening({
+    sessionId,
+    getCursor: () => cursorRef.current,
+    enabled: inMeeting && session?.status === "active",
+    isSpeaking: () => speechBusyRef.current,
+  });
   const voiceByKey = useMemo(() => {
     const map = new Map<string, string | null>();
     for (const participant of participants) map.set(participant.key, participant.voice ?? null);
@@ -196,11 +216,18 @@ export default function PracticeScreen() {
     speech.speak(fresh.map(asSpeechLine));
   }, [asSpeechLine, messages, speech]);
 
-  // Opening the mic stops playback (§9.2): otherwise the learner records the AI's voice into their turn.
+  // Taking the floor ends both: the speaker goes silent (otherwise the learner records the AI's voice into
+  // their turn, §9.2) and the meeting stops advancing on its own (§7.14) — listening is over the moment
+  // they speak.
   const stopSpeechRef = useRef(speech.stop);
   stopSpeechRef.current = speech.stop;
+  const stopListeningRef = useRef(listening.stop);
+  stopListeningRef.current = listening.stop;
   useEffect(() => {
-    if (voice.phase !== "idle") stopSpeechRef.current();
+    if (voice.phase !== "idle") {
+      stopSpeechRef.current();
+      stopListeningRef.current();
+    }
   }, [voice.phase]);
 
   if (sessionQuery.isPending) {
@@ -267,6 +294,32 @@ export default function PracticeScreen() {
         </View>
       ) : null}
 
+      {inMeeting && !finished ? (
+        <View style={styles.listenBar}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={listening.listening ? "停止旁听" : "开始旁听"}
+            onPress={listening.toggle}
+            style={({ pressed }) => [
+              styles.listenButton,
+              listening.listening && styles.listenButtonActive,
+              pressed && styles.pressed,
+            ]}
+          >
+            <Text style={[styles.listenLabel, listening.listening && styles.listenLabelActive]}>
+              {listening.listening ? "停止旁听" : "旁听"}
+            </Text>
+          </Pressable>
+          <Text style={styles.listenHint}>
+            {listening.listening
+              ? listening.advancesRemaining === null
+                ? "只听不说，会议自己进行…"
+                : `只听不说 · 还能推进 ${listening.advancesRemaining} 次`
+              : "点「旁听」让会议自己进行，你只听；随时可以开口"}
+          </Text>
+        </View>
+      ) : null}
+
       <FlatList
         ref={listRef}
         data={rows}
@@ -329,6 +382,7 @@ export default function PracticeScreen() {
       ) : null}
 
       {speech.error ? <Text style={styles.error}>朗读失败：{speech.error}</Text> : null}
+      {listening.error ? <Text style={styles.error}>{listening.error}</Text> : null}
 
       {finished ? (
         <View style={styles.footerBar}>
@@ -441,6 +495,27 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceMuted,
   },
   participant: { flexDirection: "row", alignItems: "center", gap: spacing.xs },
+  listenBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  listenButton: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceMuted,
+  },
+  listenButtonActive: { borderColor: colors.accent, backgroundColor: colors.surface },
+  listenLabel: { ...typography.label, color: colors.text },
+  listenLabelActive: { color: colors.accent },
+  listenHint: { flex: 1, ...typography.caption, color: colors.textMuted },
   participantDot: { width: 8, height: 8, borderRadius: 4 },
   participantName: { ...typography.caption, color: colors.text },
   bubbleLabel: { ...typography.caption, color: colors.textMuted, opacity: 0.9 },

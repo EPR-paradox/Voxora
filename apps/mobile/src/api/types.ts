@@ -170,6 +170,14 @@ export interface SendPracticeMessageResponse {
   session_status: "active";
 }
 
+/** What the room said while the learner only listened (design §7.14). */
+export interface AdvanceMeetingResponse {
+  assistant_messages: PracticeMessage[];
+  session_status: "active";
+  /** How many more times this session may continue without the learner. */
+  advances_remaining: number;
+}
+
 export interface EvaluationDimension {
   rating: "strong" | "developing" | "needs_work";
   evidence: string[];
