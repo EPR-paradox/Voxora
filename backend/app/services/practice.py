@@ -43,6 +43,9 @@ async def create_practice_session(
         "version": scenario.version,
         "situation": scenario.situation,
         "ai_character": scenario.ai_character,
+        # Copied into the snapshot like every other roleplay input: a session must keep the cast it
+        # started with, even if the scenario is edited later (docs/meeting-mode-v0.1.md §2).
+        "cast": scenario.cast,
         "user_objective": scenario.user_objective,
         "target_skills": scenario.target_skills,
         "target_expressions": scenario.target_expressions,
@@ -77,6 +80,7 @@ async def create_practice_session(
         id=uuid4(),
         session_id=practice_session.id,
         turn_index=0,
+        seq=1,
         role="assistant",
         content=opening_line,
         status="completed",
@@ -134,7 +138,7 @@ async def get_practice_session(
         await session.scalars(
             select(Message)
             .where(Message.session_id == practice_session.id)
-            .order_by(Message.turn_index, Message.created_at, Message.id)
+            .order_by(Message.turn_index, Message.seq)
         )
     )
     return practice_session, messages
@@ -196,6 +200,7 @@ async def send_practice_message(
                 session_id=practice_session.id,
                 client_message_id=client_message_id,
                 turn_index=practice_session.turn_count + 1,
+                seq=await _next_message_seq(session, practice_session.id),
                 role="user",
                 content=content,
                 status="pending",
@@ -218,7 +223,7 @@ async def send_practice_message(
             Message.turn_index < turn_index,
             Message.status == "completed",
         )
-        .order_by(Message.turn_index, Message.created_at, Message.id)
+        .order_by(Message.turn_index, Message.seq)
     )
     history = [{"role": message.role, "content": message.content} for message in history_rows]
     await session.rollback()
@@ -245,6 +250,7 @@ async def send_practice_message(
             id=uuid4(),
             session_id=session_id,
             turn_index=turn_index,
+            seq=await _next_message_seq(session, session_id),
             role="assistant",
             content=assistant_content,
             status="completed",
@@ -256,6 +262,19 @@ async def send_practice_message(
         await session.flush()
 
     return user_message, assistant_message, False
+
+
+async def _next_message_seq(session: AsyncSession, session_id: UUID) -> int:
+    """Next display position inside a session (docs/meeting-mode-v0.1.md §3).
+
+    Read inside the same transaction that writes the row, after the session row has been locked: two
+    turns cannot run at once for one session, so the numbers stay gap-free per session without a
+    sequence object.
+    """
+    current = await session.scalar(
+        select(func.max(Message.seq)).where(Message.session_id == session_id)
+    )
+    return (current or 0) + 1
 
 
 async def _mark_message_failed(

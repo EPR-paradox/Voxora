@@ -49,6 +49,13 @@ class Scenario(Base):
     english_level: Mapped[str | None] = mapped_column(String(20), nullable=True)
     situation: Mapped[str] = mapped_column(Text, nullable=False)
     ai_character: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, nullable=False)
+    # Meeting mode (docs/meeting-mode-v0.1.md §2): the cast array. `null` means a single-character
+    # scenario and `ai_character` still applies. Always read it through
+    # `app.scenario_cast.scenario_cast()`, never directly: that function also wraps an old
+    # `ai_character` into a one-element cast, and skipping it makes old and new scenarios behave
+    # differently. The shape is validated in the application layer, not by a CHECK constraint,
+    # because `jsonb_typeof` does not exist in the SQLite database the tests run on.
+    cast: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON_DOCUMENT, nullable=True)
     user_objective: Mapped[str] = mapped_column(Text, nullable=False)
     target_skills: Mapped[list[str]] = mapped_column(JSON_DOCUMENT, nullable=False, default=list)
     target_expressions: Mapped[list[dict[str, Any]]] = mapped_column(
@@ -134,8 +141,15 @@ class Message(Base):
         CheckConstraint("turn_index >= 0", name="ck_messages_turn_index"),
         CheckConstraint("role IN ('user', 'assistant')", name="ck_messages_role"),
         CheckConstraint("status IN ('pending', 'completed', 'failed')", name="ck_messages_status"),
+        CheckConstraint("seq > 0", name="ck_messages_seq"),
         UniqueConstraint("session_id", "client_message_id", "role", name="uq_messages_client_role"),
-        UniqueConstraint("session_id", "turn_index", "role", name="uq_messages_turn_role"),
+        # One row per speaker per turn. A meeting turn holds several assistant rows, one per
+        # participant; a learner turn still holds exactly one user row. `speaker_key` is '' for the
+        # learner rather than NULL on purpose: PostgreSQL treats NULLs as distinct, so a nullable
+        # column would make this constraint stop protecting learner turns altogether.
+        UniqueConstraint(
+            "session_id", "turn_index", "role", "speaker_key", name="uq_messages_turn_speaker"
+        ),
         Index("ix_messages_session_turn", "session_id", "turn_index"),
     )
 
@@ -145,7 +159,15 @@ class Message(Base):
     )
     client_message_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     turn_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Display order inside a session. `created_at` cannot do this: now() is constant inside a
+    # transaction, so every row one turn writes shares a timestamp and ordering by it is unstable
+    # (the client's message order could change between two renders).
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
     role: Mapped[str] = mapped_column(String(12), nullable=False)
+    # '' = the learner; otherwise a `cast[].key` from the session's scenario snapshot.
+    speaker_key: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="", server_default=""
+    )
     content: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(12), nullable=False, default="completed")
     audio_metadata: Mapped[dict[str, Any] | None] = mapped_column(JSON_DOCUMENT, nullable=True)

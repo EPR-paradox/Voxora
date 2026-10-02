@@ -235,7 +235,7 @@ async def _completed_transcript(session: AsyncSession, session_id: UUID) -> list
             Message.session_id == session_id,
             Message.status == "completed",
         )
-        .order_by(Message.turn_index, Message.created_at, Message.id)
+        .order_by(Message.turn_index, Message.seq)
     )
     return [{"role": message.role, "content": message.content} for message in rows]
 

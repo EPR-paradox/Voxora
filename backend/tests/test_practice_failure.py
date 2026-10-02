@@ -101,6 +101,7 @@ async def test_failed_turn_releases_lock_and_next_message_uses_next_index(tmp_pa
                 id=uuid4(),
                 session_id=session_id,
                 turn_index=0,
+                seq=1,
                 role="assistant",
                 content="Tell me about your project.",
                 status="completed",
