@@ -121,6 +121,11 @@ Voxora 面向希望进入或已在半导体国际化企业工作的工程师，�
 - 客户端 API base URL 从环境配置读取，不硬编码生产 URL。
 - 后端业务服务不依赖 FastAPI `Request` 对象，以便单元测试。
 - API 层负责 HTTP 状态码、输入校验和序列化；Service 层负责业务流程；Repository 层负责数据库查询。
+- 本地模式下的认证豁免只有一条规则，说清楚免得漏：**loopback 客户端免 token，其余一律要
+  `Authorization: Bearer <API_ACCESS_TOKEN>`**。每个业务 router 都必须挂 `require_practice_access`，
+  路由漏挂不会报错、也不会被 loopback 测试发现（`/scenarios` 就这么漏过一整个模块）。
+  唯一有意公开的是 `GET /api/v1/health`：它是探活端点，不含业务数据，监控不该需要凭据。
+  回归测试 `tests/test_access_coverage.py` 会遍历全部受保护路由。
 
 ### 3.2 本地网络约定
 
