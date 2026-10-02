@@ -283,6 +283,59 @@ async def send_practice_message(
     return practice_session, user_message, assistant_messages, False
 
 
+async def abandon_practice_session(
+    session: AsyncSession,
+    *,
+    session_id: UUID,
+) -> PracticeSession:
+    """Close a session the learner never spoke in (design §7.15).
+
+    Exists because a listening session has no other way out: `finish` produces a report, a report
+    needs learner turns, and a learner who only listened has none — so the session could be opened
+    and never closed. Abandoning is the honest ending: no report, no evaluation row, transcript
+    still readable.
+
+    The status is ``abandoned``, not ``completed``: the database couples ``completed`` to a non-null
+    ``completed_at`` (ck_practice_sessions_status), and completed is what the evaluation gate means.
+    Filing a silent session as completed would put it among the finished without a report.
+    """
+    async with session.begin():
+        practice_session = await session.scalar(
+            select(PracticeSession).where(PracticeSession.id == session_id).with_for_update()
+        )
+        if practice_session is None:
+            raise PracticeError(404, "resource_not_found", "Practice session not found.")
+        if practice_session.status == "abandoned":
+            # Idempotent: closing something already closed is the outcome the caller wanted.
+            return practice_session
+        if practice_session.status != "active":
+            raise PracticeError(409, "session_not_active", "This practice session already ended.")
+
+        learner_turns = await session.scalar(
+            select(func.count())
+            .select_from(Message)
+            .where(
+                Message.session_id == session_id,
+                Message.role == "user",
+                Message.status == "completed",
+            )
+        )
+        if learner_turns:
+            # Throwing away a session with real turns destroys an evaluation they can still have;
+            # that must be an explicit choice, so send them to `finish` instead.
+            raise PracticeError(
+                409,
+                "session_has_user_turns",
+                "This session has your turns: finish it to get the report.",
+            )
+
+        practice_session.status = "abandoned"
+        practice_session.processing_turn_id = None
+        practice_session.last_activity_at = datetime.now(timezone.utc)
+        await session.flush()
+    return practice_session
+
+
 async def advance_meeting(
     session: AsyncSession,
     *,
@@ -302,9 +355,8 @@ async def advance_meeting(
        (the finish gate, the report) reads "has this learner spoken?" from their own rows. Advancing
        is not speaking, so a listening session still ends with nothing to evaluate — which is the
        honest answer, not a gap to paper over.
-    3. **Bounded by a server-side budget** (:setting:`meeting_max_advances`): silence must not be
-    able to
-       generate an unbounded number of billable turns.
+    3. **Bounded by a server-side budget** (:setting:`meeting_max_advances`): silence must not
+       be able to generate an unbounded number of billable turns.
     4. **``after_seq`` makes it idempotent.** A retried request returns the turns that were already
        written instead of buying a second round.
     """

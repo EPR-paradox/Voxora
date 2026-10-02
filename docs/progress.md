@@ -739,3 +739,43 @@ chip，凭空造一个新值只会多一个没人要的筛选。真 provider 实
 
 测试 275 passed（边界用例跟着改），`ruff` / `format` 干净。
 
+## 2026-10-03（修 bug）：旁听会话关不掉
+
+用户报：「这个会议开始了就结束不了了」。查下来是我自己埋的两层问题：
+
+1. **客户端**：`canFinish = session.turn_count > 0` —— 只旁听、一句没说，结束按钮就是灰的。
+2. **服务端**：就算点得动，`finish` 也返回 409 `session_has_no_user_turns`（没有可评价的发言）。而
+   `finish.isError` 我根本没渲染，所以失败时界面**什么都不显示**。
+
+昨天定「旁听没有评价」是对的，但我只想到「不给假报告」，没想到「那它怎么结束」。停下来也是一种结束。
+
+修法：新增 `POST /sessions/{id}/abandon`（§7.15），**不生成评价、不编维度**：
+
+- 状态是 `abandoned` 而非 `completed` —— 数据库把 `completed` 与 `completed_at` 非空绑在一起，而 `completed`
+  在评价语义里意味着「已出报告」，把空会话塞进去会让它混进已完成。
+- 幂等：已经是 `abandoned` 再调返回 200 与同样响应体。
+- **有学习者发言时拒绝**（409 `session_has_user_turns`）：丢弃一份还能生成的评价必须是明确选择，那种情况走
+  `finish`。已 completed 的会话返回 409 `session_not_active` —— 不给绕过报告的暗门。
+- 记录仍可读：`GET /sessions/{id}` 对 abandoned 返回 200。
+- 客户端：结束按钮在 `turn_count == 0` 时走 abandon，并提前写明「还没有你的发言：结束就是收起这场会议，不会
+  生成评价」；结束后回首页（而不是跳进没有报告的评价页）；`finish.isError` / `abandon.isError` 现在都会显示。
+
+### 实测（真 API）
+
+```
+只旁听不发言的会话
+  finish  -> 409 session_has_no_user_turns      （原来卡死在这里）
+  abandon -> 200 {"status": "abandoned"}
+  abandon -> 200（幂等，同一响应）
+  GET     -> 200 status=abandoned，消息仍在
+有发言的会话
+  abandon -> 409 session_has_user_turns         （不会被误当成丢弃）
+```
+
+测试 275 → 281（新增 `tests/api/test_abandon_session.py` 6 条：静默会话可关、幂等、有发言时拒绝、已完成时拒绝、
+未知会话 404、abandon 不会动已生成的报告）。`tsc` 干净，native bundle 含 `/abandon` 与新提示文案。
+
+**又踩一次同样的坑**：我那个注释折行脚本这次咬掉的不只是注释，而是一整段代码（`if learner_turns:` 到
+`async def advance_meeting(` 的签名被拼成两行，缩进全错）。已手工修回并 `py_compile` 验证。结论写进 skill：
+这个脚本**不该再用**；真要折行，逐行手写 + 长度断言 + `py_compile` + 跑测试。
+

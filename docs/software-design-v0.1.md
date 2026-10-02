@@ -1,7 +1,7 @@
 # Voxora 软件设计详细规格
 
 > 产品副标题：English for the semiconductor world  
-> 文档状态：Draft v0.17（开发规格草案）  
+> 文档状态：Draft v0.18（开发规格草案）  
 > 日期：2026-10-02  
 > 产品需求来源：`../semispeak.md`  
 > 本文目标：让开发者可据此创建工程、实现数据库/API/核心流程，并编写验收测试。
@@ -709,6 +709,7 @@ Content-Type：`multipart/form-data`；字段 `audio_file`（必填）、`langua
 | 409 | session_has_no_user_turns | 没有可评价的用户发言 |
 | 409 | session_is_not_a_meeting | 单角色场景不能推进（§7.14） |
 | 409 | advance_limit_reached | 本场会议的旁听额度已用尽（§7.14） |
+| 409 | session_has_user_turns | 有学习者发言时不允许放弃，应走 finish（§7.15） |
 | 413 | payload_too_large | 文本、请求或音频超限 |
 | 415 | unsupported_media_type | 音频格式不在允许列表内 |
 | 422 | validation_error | 字段校验失败 |
@@ -761,6 +762,30 @@ Content-Type：`multipart/form-data`；字段 `audio_file`（必填）、`langua
 5. 额度由 `MEETING_MAX_ADVANCES`（默认 10）封顶，服务端强制执行：沉默不产生无限计费。第 0 轮（开场）不计入。
 6. 超时 504 `ai_provider_timeout`，上游异常 502 `ai_provider_error`，均按 §8.1 的规则重试一次。
 7. **没有发言就没有评价**：本端点不会为旁听者生成报告（`finish` 仍按既有规则返回 409 `session_has_no_user_turns`）。这是诚实的答案 —— 没有可评的内容，不编造维度。
+
+### 7.15 结束一场没有发言的会话（放弃）
+
+`POST /api/v1/practice/sessions/{session_id}/abandon`，无请求体。
+
+响应 200：`{"status": "abandoned"}`。
+
+**为什么需要它**：旁听会话没有别的出路。`finish` 的作用是生成评价，评价需要学习者的发言，而只旁听的人一句
+都没有 —— 于是会话能被打开、却关不掉（这是一个真实 bug：客户端「结束」按钮因 `turn_count == 0` 而禁用，
+就算点得动，服务端也会返回 409）。停下来也是一种结束，它应该有对应的接口，而不是逼着学习者编一句话出来。
+
+行为约定：
+
+1. **状态是 `abandoned`，不是 `completed`**。数据库把 `completed` 与「`completed_at` 非空」绑在一起
+   （`ck_practice_sessions_status`），而 `completed` 在评价语义里意味着「已出报告」。把无报告的空会话塞进
+   `completed` 会让它混进「已完成」里。
+2. **幂等**：已经是 `abandoned` 再调一次返回 200 与同样的响应体（把已经关掉的东西关掉，就是调用方想要的结果）。
+3. **有学习者发言时拒绝**：返回 409 `session_has_user_turns`。丢弃一份还能生成的评价必须是明确的选择，所以那种
+   情况请走 `finish`。已 `completed` 的会话返回 409 `session_not_active` —— 这个接口不能成为绕过报告的暗门。
+4. **不生成评价行、不生成维度、不写任何假数据**：记录仍可读（`GET /sessions/{id}` 对 `abandoned` 返回 200）。
+5. 未知会话 404 `resource_not_found`（同 §7.12 的越权规则）。
+
+客户端（§10.6）：会议页的「结束」按钮在 `turn_count == 0` 时走本接口，并提前说明「还没有你的发言：结束就是收起
+这场会议，不会生成评价」；结束后回到首页，而不是跳进一个没有报告的评价页。
 
 ## 8. Roleplay 与 Evaluation AI 设计
 

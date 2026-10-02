@@ -102,6 +102,12 @@ class AdvanceMeetingResponse(BaseModel):
     advances_remaining: int
 
 
+class AbandonSessionResponse(BaseModel):
+    """The ending for a session nobody spoke in (design §7.15): closed, and deliberately unrated."""
+
+    status: Literal["abandoned"]
+
+
 class PracticeMessageDetail(PracticeMessageResponse):
     status: Literal["pending", "completed", "failed"]
 

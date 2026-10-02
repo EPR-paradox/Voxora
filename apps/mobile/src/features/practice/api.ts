@@ -1,5 +1,6 @@
 import { apiRequest, MODEL_CALL_TIMEOUT_MS, newClientMessageId, toQueryString } from "../../api/client";
 import type {
+  AbandonSessionResponse,
   AdvanceMeetingResponse,
   PracticeSessionCreated,
   PracticeSessionDetail,
@@ -34,6 +35,18 @@ export function createSession(scenarioId: string): Promise<PracticeSessionCreate
 
 export function getSession(sessionId: string): Promise<PracticeSessionDetail> {
   return apiRequest<PracticeSessionDetail>(`/practice/sessions/${sessionId}`);
+}
+
+/**
+ * Close a session nobody spoke in (design §7.15).
+ *
+ * The way out of a listening-only session: `finish` needs learner turns before it can produce a report,
+ * and a learner who only listened has none. Idempotent — closing something already closed returns 200.
+ */
+export function abandonSession(sessionId: string): Promise<AbandonSessionResponse> {
+  return apiRequest<AbandonSessionResponse>(`/practice/sessions/${sessionId}/abandon`, {
+    method: "POST",
+  });
 }
 
 /**

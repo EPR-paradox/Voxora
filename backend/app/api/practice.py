@@ -23,6 +23,7 @@ from app.evaluation_schemas import (
     FinishPracticeSessionRequest,
 )
 from app.practice_schemas import (
+    AbandonSessionResponse,
     AdvanceMeetingRequest,
     AdvanceMeetingResponse,
     CreatePracticeSessionRequest,
@@ -42,6 +43,7 @@ from app.scenario_cast import participant_payloads
 from app.services.evaluation import finish_practice_session, get_evaluation, retry_evaluation
 from app.services.practice import (
     PracticeError,
+    abandon_practice_session,
     advance_meeting,
     create_practice_session,
     get_practice_session,
@@ -251,6 +253,29 @@ async def post_advance(
         session_status="active",
         advances_remaining=remaining,
     )
+
+
+@router.post("/{session_id}/abandon", response_model=AbandonSessionResponse)
+async def post_abandon(
+    session_id: UUID,
+    request: Request,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> AbandonSessionResponse | JSONResponse:
+    """Close a session the learner never spoke in (design §7.15).
+
+    The way out of a listening-only session: `finish` needs learner turns to evaluate, and there are
+    none. No report is produced, and none is pretended — the transcript stays readable.
+    """
+    try:
+        await abandon_practice_session(session, session_id=session_id)
+    except PracticeError as exc:
+        return error_response(
+            request,
+            status_code=exc.status_code,
+            code=exc.code,
+            message=exc.message,
+        )
+    return AbandonSessionResponse(status="abandoned")
 
 
 @router.post("/{session_id}/finish", response_model=EvaluationStatusResponse)

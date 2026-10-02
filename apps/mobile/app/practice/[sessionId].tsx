@@ -18,7 +18,7 @@ import { ErrorView, LoadingView } from "../../src/components/StateViews";
 import { newClientMessageId } from "../../src/api/client";
 import { ApiError, describeError } from "../../src/api/errors";
 import { finishSession } from "../../src/features/evaluation/api";
-import { getSession, sendMessage } from "../../src/features/practice/api";
+import { abandonSession, getSession, sendMessage } from "../../src/features/practice/api";
 import { useMeetingListening } from "../../src/features/practice/useMeetingListening";
 import { useSpeechOutput, type SpeechLine } from "../../src/features/speech/useSpeechOutput";
 import { formatDuration, useVoiceInput } from "../../src/features/speech/useVoiceInput";
@@ -80,6 +80,16 @@ export default function PracticeScreen() {
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["session", sessionId] });
       router.replace({ pathname: "/evaluation/[sessionId]", params: { sessionId } });
+    },
+  });
+
+  // Listening-only sessions have no report to fetch, so they end here instead (§7.15). Without this the
+  // session could be opened and never closed: `finish` refuses when the learner never spoke.
+  const abandon = useMutation({
+    mutationFn: () => abandonSession(sessionId),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["session", sessionId] });
+      router.replace("/");
     },
   });
 
@@ -245,7 +255,9 @@ export default function PracticeScreen() {
     );
   }
 
-  const canFinish = session.turn_count > 0 && !finish.isPending;
+  const hasSpoken = session.turn_count > 0;
+  const ending = finish.isPending || abandon.isPending;
+  const canEnd = !ending;
   const finished = session.status !== "active";
 
   return (
@@ -267,12 +279,20 @@ export default function PracticeScreen() {
               </Pressable>
               {finished ? null : (
                 <Pressable
-                  disabled={!canFinish}
-                  onPress={() => finish.mutate()}
+                  accessibilityRole="button"
+                  accessibilityLabel={hasSpoken ? "结束并生成评价" : "结束这次旁听"}
+                  disabled={!canEnd}
+                  onPress={() => {
+                    // Speaking ends listening, and so does leaving: stop the room before closing it.
+                    stopListeningRef.current();
+                    stopSpeechRef.current();
+                    if (hasSpoken) finish.mutate();
+                    else abandon.mutate();
+                  }}
                   style={({ pressed }) => [pressed && styles.pressed]}
                 >
-                  <Text style={[styles.headerAction, !canFinish && styles.headerActionDisabled]}>
-                    {finish.isPending ? "生成中…" : "结束"}
+                  <Text style={[styles.headerAction, !canEnd && styles.headerActionDisabled]}>
+                    {ending ? "处理中…" : "结束"}
                   </Text>
                 </Pressable>
               )}
@@ -315,7 +335,9 @@ export default function PracticeScreen() {
               ? listening.advancesRemaining === null
                 ? "只听不说，会议自己进行…"
                 : `只听不说 · 还能推进 ${listening.advancesRemaining} 次`
-              : "点「旁听」让会议自己进行，你只听；随时可以开口"}
+              : hasSpoken
+                ? "点「旁听」让会议自己进行，你只听；随时可以开口"
+                : "点「旁听」让会议自己进行。你还没发言，结束时不会生成评价"}
           </Text>
         </View>
       ) : null}
@@ -383,15 +405,26 @@ export default function PracticeScreen() {
 
       {speech.error ? <Text style={styles.error}>朗读失败：{speech.error}</Text> : null}
       {listening.error ? <Text style={styles.error}>{listening.error}</Text> : null}
+      {finish.isError ? (
+        <Text style={styles.error}>{describeError(finish.error)}</Text>
+      ) : null}
+      {abandon.isError ? (
+        <Text style={styles.error}>{describeError(abandon.error)}</Text>
+      ) : null}
 
       {finished ? (
         <View style={styles.footerBar}>
-          <AppButton
-            label="看反馈"
-            onPress={() =>
-              router.replace({ pathname: "/evaluation/[sessionId]", params: { sessionId } })
-            }
-          />
+          {session.status === "abandoned" ? (
+            // Listening-only sessions end without a report (§7.15): send them home, not to an empty page.
+            <AppButton label="返回" onPress={() => router.replace("/")} />
+          ) : (
+            <AppButton
+              label="看反馈"
+              onPress={() =>
+                router.replace({ pathname: "/evaluation/[sessionId]", params: { sessionId } })
+              }
+            />
+          )}
         </View>
       ) : (
         <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined}>

@@ -170,6 +170,11 @@ export interface SendPracticeMessageResponse {
   session_status: "active";
 }
 
+/** The ending for a session nobody spoke in (design §7.15). */
+export interface AbandonSessionResponse {
+  status: "abandoned";
+}
+
 /** What the room said while the learner only listened (design §7.14). */
 export interface AdvanceMeetingResponse {
   assistant_messages: PracticeMessage[];
