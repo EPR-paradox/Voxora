@@ -49,8 +49,7 @@ async def transcribe_audio(
     if len(audio) > settings.speech_max_bytes:
         raise PracticeError(413, "payload_too_large", "The audio clip is too large.")
     # ``duration_ms`` comes from the client, so treat it as a courtesy check: the byte cap is what
-    # actually
-    # bounds the work the server does.
+    # actually bounds the work the server does.
     if duration_ms is not None and duration_ms > settings.speech_max_seconds * 1000:
         raise PracticeError(
             413,

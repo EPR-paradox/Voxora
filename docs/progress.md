@@ -363,3 +363,48 @@ small.en + CPU int8（i5-10300H 8 线程）：
 - 已定决策写进草案 §9.1/§9.2 与 §10：合成音频**不落盘、不缓存**（与输入音频同一条隐私线，代价是重放重新合成）。
 
 6.6b（edge-tts provider + 端点）与 6.6c（客户端播放队列、开麦即停播）是下一步。
+
+## 2026-10-02（语音输出 6.6b）：一句话变成音频
+
+- `app/ai/speech_synthesis.py`：`SpeechSynthesisProvider` 协议 + `FakeSpeechSynthesisProvider`。Fake 返回**真实的静音
+  WAV**，不是占位字节 —— mock 模式下手机要真的能播，否则客户端 bug 会被「反正 mock」掩盖。
+- `app/ai/edge_tts_synthesis.py`：edge-tts 实现。`edge_tts` 在调用内 import（它拖进 websocket 客户端，不该出现在一个
+  可能永远不开口的 API 的启动路径上）；整句缓冲后一次性返回（播放需要完整文件，而音频不落盘，没有地方可流）；
+  流式累积时有 8 MB 上限，防跑飞。超时翻译成内建 `TimeoutError`（服务层映射 504），其他异常包成
+  `SpeechSynthesisError`（502），空音频也算失败 —— 否则客户端拿到的是「200 + 空文件」。
+- `app/services/speech_synthesis.py`：调用供应商**之前**先验文本与音色：空、超 1000 字符、音色不在目录 → 422。
+- §7.13 端点：`POST /api/v1/practice/speech/synthesis`，请求 `{text, voice}`，成功**直接回音频字节**
+  （`audio/mpeg`，`Cache-Control: no-store`），失败回 §7.12 的 JSON 错误信封 —— 客户端按 Content-Type 分流。
+- 顺带统一了一处不一致：`/scenarios/{id}` 的 `cast` 之前直接读原始 JSON（旧数据 `voice: null`），现在与会话详情的
+  `participants` 一样走 `participant_payloads()`，客户端不可能拿到「没有音色的与会者」。新的共享投影函数放在
+  `scenario_cast.py`，消息侧的 `speaker_index` 保持只管展示字段（消息不需要音色）。
+- 配置：`SPEECH_SYNTHESIS_PROVIDER`（mock/edge_tts）、`SPEECH_SYNTHESIS_TIMEOUT_SECONDS=30`、
+  `SPEECH_SYNTHESIS_MAX_CHARS=1000`；`.env.example` 与规格 §11.1 同步。合成与转写是两个独立 provider、两个独立超时
+  （合成 30 秒 vs 转写 180 秒）—— 两者耗时形态相反。
+- 测试 216 → 234：`tests/api/test_speech_synthesis.py`（可播放音频、`no-store`、什么都不写、空/超长/未知音色的 422、
+  504/502、错误响应不泄露内部路径）与 `tests/test_edge_tts_synthesis.py`（忽略非音频块、空音频、超时、客户端爆炸、
+  配置失败闭合）。
+
+### 闭环实测（真 provider，经运行中的 API）
+
+```
+同一句："Can I flag one risk before we move on? Cutting that would cost us the calibration pass."
+en-US-AndrewMultilingualNeural  200 audio/mpeg no-store  31968 B  2.8s
+en-GB-SoniaNeural               200 audio/mpeg no-store  36144 B  2.3s
+en-IN-NeerjaExpressiveNeural    200 audio/mpeg no-store  41904 B  1.7s
+
+再把三段 MP3 喂回 /practice/speech/transcriptions：
+  三个都逐字还原原文（duration_ms 5328 / 6024 / 6984）
+未知音色 → 422 validation_error；空白文本 → 422 validation_error
+```
+
+这条闭环是这次真正值钱的东西：它同时证明合成音频**可播、可懂、文本正确**，而不是「返回了一堆字节」。
+
+**踩坑记录**（写给未来的自己）：我写了一个自动折行脚本处理 E501，它把 `#:` 注释标记、docstring 的结束三引号、
+以及缩进续行都拆坏过（`app/ai/speech.py` 的 `module has\nno ORM imports` 就是它的手笔，已修）。教训：折行脚本必须
+只处理「整行注释块」或「docstring 段落」，并且每次都要 `py_compile` + 跑测试验证；能用手写就手写。
+
+### 还没做
+
+- 6.6c：客户端播放队列、「按麦克风即停播」、发言气泡上的播放按钮。
+- 真机验收：合成语音在 Expo Go 里的播放（web 渲染过不等于 native 过）。

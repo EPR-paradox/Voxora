@@ -1,7 +1,7 @@
 # Voxora 软件设计详细规格
 
 > 产品副标题：English for the semiconductor world  
-> 文档状态：Draft v0.10（开发规格草案）  
+> 文档状态：Draft v0.11（开发规格草案）  
 > 日期：2026-10-02  
 > 产品需求来源：`../semispeak.md`  
 > 本文目标：让开发者可据此创建工程、实现数据库/API/核心流程，并编写验收测试。
@@ -717,6 +717,23 @@ Content-Type：`multipart/form-data`；字段 `audio_file`（必填）、`langua
 
 不得向客户端返回 Python traceback、SQL、内部路径、API key 或供应商原始凭据。
 
+### 7.13 语音合成（TTS）
+
+`POST /api/v1/practice/speech/synthesis`
+
+请求体 `application/json`：`{"text": "...", "voice": "en-GB-SoniaNeural"}`。`voice` 取自会话详情里 `participants[].voice`（§9），客户端不保存音色目录副本。
+
+响应 200：**直接返回音频字节**，`Content-Type: audio/mpeg`，`Cache-Control: no-store`。不套 JSON 信封 —— 客户端要把响应直接交给播放器，包一层只会多一次解码。
+
+行为约定：
+
+1. 这是**输出法端点，不是消息端点**：不创建消息、不修改会话状态。会议里的发言在生成时就已入库（§7.7），把一句话读出来不产生任何新状态。
+2. **合成音频不落盘、不进数据库、不缓存**（会议草案 §9.2）：音频只作为响应体存在，服务端不留副本，也不允许端上/中间层缓存（`no-store`）。代价是重放要重新合成 —— 实测单句 1.7–2.8 秒、免费，可接受。
+3. 与会话解耦，理由同 §7.11 规则 6：读一句话不依赖场景，绑定会话是契约变更而不是加字段。
+4. 不可朗读的输入在调用供应商**之前**就拒绝：文本去空白后为空、超过 `SPEECH_SYNTHESIS_MAX_CHARS`（默认 1000，会议单条发言上限 60 词远低于此）、或 `voice` 不在服务端音色目录内，一律 422 `validation_error`。音色目录在服务端，客户端传错名字必须立刻失败，而不是变成一个「按下没反应」的按钮。
+5. 供应商超时 504 `ai_provider_timeout`，上游异常 502 `ai_provider_error`；客户端可重试同一句。
+6. 错误响应（4xx/5xx）是 JSON（§7.12 的统一错误信封），成功响应才是音频。客户端按 `Content-Type` 分流。
+
 ## 8. Roleplay 与 Evaluation AI 设计
 
 ### 8.1 Provider 接口
@@ -831,6 +848,21 @@ class SpeechProvider(Protocol):
 - 不做流式识别。一期是“录完 → 整段转写”，流式属于 §1.4 的不做范围。
 
 转写无 prompt，不适用 §8.5 的 prompt 版本管理，但 `provider` / `model` 必须随结果返回并记入指标，便于在准确率回归时定位模型变更。
+
+**语音合成（输出侧，§7.13）**：
+
+```python
+class SpeechSynthesisProvider(Protocol):
+    async def synthesize(self, text: str, *, voice: str) -> SynthesisResult: ...
+```
+
+`SynthesisResult` 含 `audio`（bytes）、`content_type`、`voice`、`provider`、`model`。与转写同规则：Service 只依赖协议，测试用 `FakeSpeechSynthesisProvider`（返回**可播放的静音 WAV**，不是占位字节 —— mock 模式下手机要真的能播，否则客户端 bug 会被「反正 mock」掩盖）。
+
+- **已实现（2026-10-02）**：`app/ai/speech_synthesis.py`（协议 + Fake）、`app/ai/edge_tts_synthesis.py`（实现）、`app/services/speech_synthesis.py`、`app/api/speech.py` 的 §7.13 路由。音色目录在 `app/ai/voices.py`（8 个 edge-tts 英文音色，美/英/印，男女各半），按 key 确定性分配（会议草案 §9.1）。
+- **选型：edge-tts**（第一版）。实测本机**直连可用、不需要代理**、无需密钥、免费；单句 1.7–2.8 秒。离线需求再上 piper —— 协议不变，只换实现。
+- **实测闭环（2026-10-02）**：三个音色各合成同一句 → 各自的 MP3（32/36/42 KB，5.3/6.0/7.0 秒）→ 再喂回 §7.11 转写端点 → **三个都逐字还原原文**。这条闭环同时验证了合成音频真的可播、可懂、文本正确，不是「返回了一堆字节」。
+- 合成**不落盘、不缓存**（§7.13 规则 2，会议草案 §9.2）：服务端不留副本，响应带 `Cache-Control: no-store`。要改成缓存必须先立 ADR 回答「留多久、谁能删」。
+- 合成与转写是两个独立 provider、两个独立超时（合成 30 秒 vs 转写 180 秒），理由同前：两者的耗时形态完全相反（一句话几百毫秒 vs 一段音频几十秒）。
 
 ## 9. 会话状态与一致性
 
@@ -972,6 +1004,9 @@ SPEECH_COMPUTE_TYPE=int8
 SPEECH_TIMEOUT_SECONDS=180
 SPEECH_MAX_SECONDS=300
 SPEECH_MAX_BYTES=33554432
+SPEECH_SYNTHESIS_PROVIDER=mock
+SPEECH_SYNTHESIS_TIMEOUT_SECONDS=30
+SPEECH_SYNTHESIS_MAX_CHARS=1000
 MAX_USER_MESSAGE_CHARS=4000
 MAX_CONTEXT_MESSAGES=24
 LOG_LEVEL=INFO
@@ -1131,7 +1166,8 @@ Local Speech Provider / faster-whisper (optional; FakeSpeechProvider in tests)
 
 ### Phase 5 — 个人真实使用与语音试验
 
-交付：首批人工审校场景、练习体验记录、开麦/闭麦语音输入（§7.11 / §8.6 / §10.4）、转写速度与准确率实测（不保存音频，须覆盖 300 秒上限在 GPU 与 CPU 回退两条路径上的耗时与显存/内存）。
+交付：首批人工审校场景、练习体验记录、开麦/闭麦语音输入（§7.11 / §8.6 / §10.4）、转写速度与准确率实测（不保存音频）。
+状态（2026-10-02）：语音输入与语音合成两端均已实现并实测（§8.6、§7.13）；GPU 路径经评估后放弃（CPU int8 已 11.6x 实时，理由见 §10.4），因此「GPU 与 CPU 回退两条路径」这一条按实测改为**只测 CPU 路径**，理由是收益为零、维护成本不为零。真机验收（Expo Go 上的开麦与播放）待补。
 验收：按实际连续使用结果调整 Rubric、场景质量和反馈长度；再决定实时语音与多人测试用户。
 
 ### Phase 6 — 会议模式（多角色会议模拟）

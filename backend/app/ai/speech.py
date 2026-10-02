@@ -1,17 +1,15 @@
 """The speech-to-text contract (design §8.6, §7.11).
 
 Transcription is an input method, not a message: the service turns a recording into text and forgets
-the audio. Nothing here touches practice sessions, messages or the database — that is why this
-module has
-no ORM imports.
+the audio. Nothing here touches practice sessions, messages or the database — which is why this
+module has no ORM imports.
 
 Two failure modes are part of the contract rather than surprises:
 
 - ``SpeechNotRecognized`` -> HTTP 422 ``speech_not_recognized``: the clip decoded but held no usable
   speech. Returning empty text instead would let the client send an empty message.
 - ``SpeechProviderError`` -> HTTP 502, ``TimeoutError`` -> HTTP 504, both retryable by the learner
-with
-  the same clip.
+  with the same clip.
 """
 
 from __future__ import annotations
@@ -56,7 +54,7 @@ class FakeSpeechProvider:
 
     name = "fake"
     model = "fake-v1"
-    #: Tests set this to an exception instance to exercise the failure paths.
+    #: : Tests set this to an exception instance to exercise the failure paths.
     fail_with: Exception | None = None
 
     async def transcribe(

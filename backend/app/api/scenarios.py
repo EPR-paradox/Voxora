@@ -6,7 +6,8 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db_session, require_practice_access
-from app.schemas import ScenarioDetail, ScenarioListResponse, ScenarioSummary
+from app.scenario_cast import participant_payloads
+from app.schemas import ScenarioDetail, ScenarioListResponse, ScenarioParticipant, ScenarioSummary
 from app.services.scenarios import get_published_scenario, list_scenarios
 
 router = APIRouter(
@@ -62,4 +63,11 @@ async def get_scenario(
                 }
             },
         )
-    return ScenarioDetail.model_validate(scenario)
+    detail = ScenarioDetail.model_validate(scenario)
+    if detail.cast:
+        # The stored cast may predate voices (§9): project it through the cast accessor so a client
+        # never receives a participant it cannot have spoken.
+        # ``scenario_cast`` reads mappings; here the source is the ORM row.
+        cast = participant_payloads({"cast": scenario.cast})
+        detail.cast = [ScenarioParticipant(**item) for item in cast]
+    return detail

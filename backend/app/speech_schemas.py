@@ -15,3 +15,15 @@ class TranscriptionResponse(BaseModel):
     duration_ms: int | None = None
     provider: str
     model: str
+
+
+class SynthesisRequest(BaseModel):
+    """One line to speak (docs/meeting-mode-v0.1.md §9).
+
+    ``voice`` comes from the session's ``participants``, so the client never keeps its own copy of
+    the catalog. The endpoint is not session-scoped, for the same reason transcription is not (§7.11
+    rule 6): speaking a line does not depend on the scenario.
+    """
+
+    text: str
+    voice: str

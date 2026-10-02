@@ -8,7 +8,9 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from conftest import ApiHarness, build_scenario
+from conftest import ApiHarness, build_scenario, display_fields
+
+from app.ai.voices import VOICE_CATALOG
 
 MEETING_CAST = [
     {"key": "eng_lead", "name": "Dana Whitfield", "title": "Engineering Lead"},
@@ -44,11 +46,15 @@ async def test_the_opening_can_hold_two_voices(api: ApiHarness) -> None:
 
     assert [participant["key"] for participant in payload["participants"]] == ["eng_lead", "pm"]
     assert [message["speaker_key"] for message in payload["messages"]] == ["eng_lead", "pm"]
-    assert payload["messages"][0]["speaker"] == {
+    speaker = payload["messages"][0]["speaker"]
+    assert display_fields(speaker) == {
         "key": "eng_lead",
         "name": "Dana Whitfield",
         "title": "Engineering Lead",
     }
+    # Each speaker carries the voice to be read aloud with, and it is one the catalog knows (§9).
+    assert speaker["voice"] in VOICE_CATALOG
+    assert len({participant["voice"] for participant in payload["participants"]}) == 2
     assert all(message["turn_index"] == 0 for message in payload["messages"])
 
 
@@ -99,7 +105,8 @@ async def test_scenario_detail_publishes_the_cast(api: ApiHarness) -> None:
     detail = await api.client.get(f"/api/v1/scenarios/{scenario_id}")
 
     assert detail.status_code == 200
-    assert detail.json()["cast"] == MEETING_CAST
+    assert [display_fields(item) for item in detail.json()["cast"]] == MEETING_CAST
+    assert all(item["voice"] in VOICE_CATALOG for item in detail.json()["cast"])
 
 
 async def test_a_single_character_scenario_reports_one_participant(api: ApiHarness) -> None:

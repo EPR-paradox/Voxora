@@ -14,11 +14,11 @@ from typing import Any
 
 from app.ai.voices import is_known_voice, resolve_voice
 
-#: `key` of the single participant a pre-meeting-mode scenario is wrapped into.
+#: : `key` of the single participant a pre-meeting-mode scenario is wrapped into.
 SINGLE_CHARACTER_KEY = "interviewer"
 DEFAULT_CHARACTER_NAME = "Interviewer"
 
-#: A meeting has 2-3 participants: fewer has no meeting feel, more and the learner loses track
+#: : A meeting has 2-3 participants: fewer has no meeting feel, more and the learner loses track :
 #: of who is speaking (docs/meeting-mode-v0.1.md §10).
 MIN_MEETING_CAST = 2
 MAX_MEETING_CAST = 3
@@ -31,8 +31,8 @@ _MAX_TEXT_LENGTH = 200
 def scenario_cast(scenario: Mapping[str, Any]) -> list[dict[str, Any]]:
     """Participants of a scenario or of a session's scenario snapshot, always at least one.
 
-    A stored ``cast`` wins. Otherwise the legacy single ``ai_character`` becomes a one-element
-    cast, so callers never need to know which generation of scenario they are looking at.
+    A stored ``cast`` wins. Otherwise the legacy single ``ai_character`` becomes a one-element cast,
+    so callers never need to know which generation of scenario they are looking at.
     """
     cast = scenario.get("cast")
     if isinstance(cast, list):
@@ -62,12 +62,30 @@ def speaker_index(scenario: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
     }
 
 
+def participant_payloads(scenario: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """The room as the client sees it: display fields plus the voice to speak with (§9).
+
+    Every projection of a cast goes through here or through ``speaker_index``, so a client can never
+    be handed a participant whose voice is missing (a stored cast written before voices existed) or
+    whose voice has been renamed out of the catalog.
+    """
+    return [
+        {
+            "key": str(participant["key"]),
+            "name": participant.get("name") or DEFAULT_CHARACTER_NAME,
+            "title": participant.get("title") or "",
+            "voice": participant.get("voice") or resolve_voice(str(participant["key"])),
+        }
+        for participant in scenario_cast(scenario)
+    ]
+
+
 def normalize_cast(cast: Any) -> list[dict[str, Any]] | None:
     """Validate a cast for storage. Returns the cleaned list, or ``None`` for 'no cast'.
 
     Raises ``ValueError`` rather than storing a shape that would later break prompt building or
-    output validation: a cast whose keys do not survive a round trip through the database would
-    only fail at the moment the learner is waiting for a reply.
+    output validation: a cast whose keys do not survive a round trip through the database would only
+    fail at the moment the learner is waiting for a reply.
     """
     if cast is None:
         return None
@@ -154,6 +172,7 @@ __all__ = [
     "SINGLE_CHARACTER_KEY",
     "is_meeting",
     "normalize_cast",
+    "participant_payloads",
     "scenario_cast",
     "speaker_index",
 ]

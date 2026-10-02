@@ -30,6 +30,9 @@ class ScenarioParticipant(BaseModel):
     key: str
     name: str
     title: str = ""
+    #: : Which voice this participant speaks with (docs/meeting-mode-v0.1.md §9). Sent to the client
+    #: so : it can ask for the line to be spoken without keeping its own copy of the catalog.
+    voice: str | None = None
 
 
 class ScenarioDetail(ScenarioSummary):

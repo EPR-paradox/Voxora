@@ -14,6 +14,7 @@ from app.scenario_cast import (
     SINGLE_CHARACTER_KEY,
     is_meeting,
     normalize_cast,
+    participant_payloads,
     scenario_cast,
     speaker_index,
 )
@@ -79,6 +80,22 @@ def test_speaker_index_maps_keys_to_display_fields() -> None:
         "eng_lead": {"name": "Dana Whitfield", "title": "Engineering Lead"},
         "pm": {"name": "Marco Ruiz", "title": "Product Manager"},
     }
+
+
+def test_participant_payloads_carry_a_voice_for_everyone() -> None:
+    """The client asks for a line to be spoken by voice, and it never keeps the catalog (§9)."""
+    payloads = participant_payloads(MEETING_SCENARIO)
+
+    assert [item["key"] for item in payloads] == ["eng_lead", "pm"]
+    assert all(item["voice"] in VOICE_CATALOG for item in payloads)
+    assert payloads[0]["voice"] != payloads[1]["voice"]
+
+
+def test_participant_payloads_repair_a_legacy_cast() -> None:
+    """A cast stored before voices existed still comes back speakable."""
+    payloads = participant_payloads({"cast": [{"key": "eng_lead", "name": "Dana"}]})
+
+    assert payloads[0]["voice"] in VOICE_CATALOG
 
 
 def test_normalize_cast_accepts_two_to_three_participants() -> None:

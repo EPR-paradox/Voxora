@@ -2,11 +2,13 @@ from collections.abc import AsyncIterator
 from uuid import uuid4
 
 import pytest
+from conftest import display_fields
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.ai.roleplay import FakeRoleplayProvider
+from app.ai.voices import VOICE_CATALOG, resolve_voice
 from app.core.config import settings
 from app.db.base import Base
 from app.db.models import Scenario, User
@@ -94,7 +96,12 @@ async def test_create_session_saves_snapshot_and_opening_message(
             "seq": 1,
             "role": "assistant",
             "speaker_key": "interviewer",
-            "speaker": {"key": "interviewer", "name": "Interviewer", "title": "Manager"},
+            "speaker": {
+                "key": "interviewer",
+                "name": "Interviewer",
+                "title": "Manager",
+                "voice": resolve_voice("interviewer"),
+            },
             "content": "Could you briefly introduce the project and your role in it?",
             "status": "completed",
         }
@@ -135,9 +142,10 @@ async def test_message_retry_is_idempotent_and_trims_content(
     ]
     assert first.json()["session_status"] == "active"
     assert len(history.json()["messages"]) == 3
-    assert history.json()["participants"] == [
+    assert [display_fields(participant) for participant in history.json()["participants"]] == [
         {"key": "interviewer", "name": "Interviewer", "title": "Manager"}
     ]
+    assert history.json()["participants"][0]["voice"] in VOICE_CATALOG
 
 
 @pytest.mark.asyncio

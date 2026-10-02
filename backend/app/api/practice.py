@@ -36,7 +36,7 @@ from app.practice_schemas import (
     SendPracticeMessageRequest,
     SendPracticeMessageResponse,
 )
-from app.scenario_cast import speaker_index
+from app.scenario_cast import participant_payloads
 from app.services.evaluation import finish_practice_session, get_evaluation, retry_evaluation
 from app.services.practice import (
     PracticeError,
@@ -286,11 +286,7 @@ async def retry_session_evaluation(
 
 def _participants(snapshot: dict) -> list[ScenarioParticipant]:
     """The people in this session's room, from its own snapshot (docs/meeting-mode-v0.1.md §4)."""
-    index = speaker_index(snapshot)
-    return [
-        ScenarioParticipant(key=key, name=item["name"], title=item["title"])
-        for key, item in index.items()
-    ]
+    return [ScenarioParticipant(**item) for item in participant_payloads(snapshot)]
 
 
 def _speaker(participants: list[ScenarioParticipant], key: str) -> ScenarioParticipant | None:

@@ -7,12 +7,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from app.ai.edge_tts_synthesis import build_synthesis_provider
 from app.ai.evaluation import EvaluationProvider
 from app.ai.faster_whisper_speech import build_speech_provider
 from app.ai.openai_compatible import build_roleplay_provider
 from app.ai.openai_compatible_evaluation import build_evaluation_provider
 from app.ai.roleplay import RoleplayProvider
 from app.ai.speech import SpeechProvider
+from app.ai.speech_synthesis import SpeechSynthesisProvider
 from app.api.deps import PracticeAccessError, get_database_health
 from app.api.errors import error_response
 from app.api.practice import router as practice_router
@@ -27,16 +29,14 @@ def create_app(
     roleplay_provider: RoleplayProvider | None = None,
     evaluation_provider: EvaluationProvider | None = None,
     speech_provider: SpeechProvider | None = None,
+    speech_synthesis_provider: SpeechSynthesisProvider | None = None,
 ) -> FastAPI:
     """Build the application.
 
-    ``roleplay_provider`` and ``evaluation_provider`` are explicit seams for tests: when passed, the
-    app
-    uses them as-is and leaves their lifecycle to the caller. Otherwise each is built from settings
-    at
-    startup, so a misconfigured deployment fails to start instead of failing on the first user turn,
-    and
-    the HTTP clients they own are closed on shutdown.
+    The provider arguments are explicit seams for tests: when passed, the app uses them as-is and
+    leaves their lifecycle to the caller. Otherwise each is built from settings at startup, so a
+    misconfigured deployment fails to start instead of failing on the first user turn, and the
+    clients they own are closed on shutdown.
     """
     if settings.app_env != "local":
         raise RuntimeError(
@@ -52,9 +52,11 @@ def create_app(
         roleplay = roleplay_provider or build_roleplay_provider(settings)
         evaluation = evaluation_provider or build_evaluation_provider(settings)
         speech = speech_provider or build_speech_provider(settings)
+        synthesis = speech_synthesis_provider or build_synthesis_provider(settings)
         app.state.roleplay_provider = roleplay
         app.state.evaluation_provider = evaluation
         app.state.speech_provider = speech
+        app.state.speech_synthesis_provider = synthesis
         try:
             yield
         finally:
@@ -64,6 +66,8 @@ def create_app(
                 await evaluation.aclose()
             if speech_provider is None:
                 await speech.aclose()
+            if speech_synthesis_provider is None:
+                await synthesis.aclose()
             await engine.dispose()
 
     app = FastAPI(title="Voxora API", version=settings.app_version, lifespan=lifespan)

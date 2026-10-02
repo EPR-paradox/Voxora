@@ -24,9 +24,9 @@ class Settings(BaseSettings):
     max_context_messages: int = 24
     log_level: str = "INFO"
 
-    # Roleplay provider. ``mock`` keeps tests and offline development free of external
-    # calls; ``openai_compatible`` targets any /chat/completions endpoint (DeepSeek by
-    # default, other vendors by changing ``ai_base_url`` and ``ai_model``).
+    # Roleplay provider. ``mock`` keeps tests and offline development free of external calls;
+    # ``openai_compatible`` targets any /chat/completions endpoint (DeepSeek by default, other
+    # vendors by changing ``ai_base_url`` and ``ai_model``).
     ai_provider: str = "mock"
     ai_base_url: str = "https://api.deepseek.com/v1"
     ai_api_key: SecretStr | None = None
@@ -49,17 +49,16 @@ class Settings(BaseSettings):
     ai_evaluation_max_tokens: int = 4000
 
     # Speech-to-text (design §8.6, §7.11). ``mock`` keeps tests and offline development free of
-    # model
-    # downloads; ``faster_whisper`` runs on this machine — GPU when the libraries are present, CPU
-    # int8
-    # otherwise.
+    # model downloads; ``faster_whisper`` runs on this machine — GPU when the libraries are present,
+    # CPU int8 otherwise.
     speech_provider: str = "mock"
     speech_model: str = "small.en"
     speech_device: str = "auto"  # auto | cpu | cuda
     speech_compute_type: str = "int8"
     # Transcription must NOT reuse ``ai_timeout_seconds``: a 300 s clip takes minutes to decode on
-    # the
-    # CPU fallback path, so a 30 s budget is a guaranteed 504 (§8.6). Pinned by measurement.
+    # the CPU fallback path, so a 30 s budget is a guaranteed 504 (§8.6). Pinned by measurement: a
+    # 313 s clip takes 26.9 s on the CPU int8 path (11.6x realtime), leaving ~6.7x headroom at 180
+    # s.
     speech_timeout_seconds: float = 180.0
     speech_max_seconds: int = 300
     speech_max_bytes: int = 32 * 1024 * 1024
@@ -75,6 +74,18 @@ class Settings(BaseSettings):
         "audio/mp3",
         "audio/ogg",
     ]
+
+    # Text-to-speech (design §8.6, docs/meeting-mode-v0.1.md §9). ``mock`` keeps the phone playable
+    # without any network; ``edge_tts`` is a keyless cloud voice service, verified reachable from
+    # this machine without a proxy. The audio is never stored (§9.2), so there is no cache to
+    # configure.
+    speech_synthesis_provider: str = "mock"
+    # Synthesis is the opposite shape of a transcription: a meeting-length line comes back in a few
+    # hundred milliseconds, so this budget only has to cover a stalled websocket.
+    speech_synthesis_timeout_seconds: float = 30.0
+    # A meeting turn is capped at 60 words by the prompt, which lands well under 500 characters; the
+    # ceiling is here so a runaway client cannot make the server speak a novel.
+    speech_synthesis_max_chars: int = 1000
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
