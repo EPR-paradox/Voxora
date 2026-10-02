@@ -92,6 +92,10 @@ class Settings(BaseSettings):
     # this machine without a proxy. The audio is never stored (§9.2), so there is no cache to
     # configure.
     speech_synthesis_provider: str = "mock"
+    # Where Piper's voice files live (<name>.onnx plus <name>.onnx.json). A voice is 20-63 MB, so
+    # the models are downloaded outside the repo (`python -m piper.download_voices <name>`) and the
+    # directory is configuration rather than a checked-in path.
+    speech_synthesis_piper_dir: str = ""
     # Synthesis is the opposite shape of a transcription: a meeting-length line comes back in a few
     # hundred milliseconds, so this budget only has to cover a stalled websocket.
     speech_synthesis_timeout_seconds: float = 30.0

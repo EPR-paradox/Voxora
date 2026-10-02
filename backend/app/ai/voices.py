@@ -15,16 +15,27 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Collection
 
-#: Names are edge-tts voice ids, ordered so that walking the list rotates accent and gender.
+#: Names are Piper voice models, resolved on disk as ``<name>.onnx`` (see ``piper_synthesis``).
+#: Ordered so that walking the list rotates accent (US/GB) and gender.
+#:
+#: The catalog is pinned by name because these strings are stored inside scenarios and repeated in
+#: synthesis requests: adding a voice is safe, but renaming or removing one quietly changes how
+#: characters sound and orphans what is already stored. Hence the read path maps an unknown value to
+#: a deterministic catalog voice rather than refusing to speak, while the write path rejects it.
+#:
+#: **The names belong to the configured synthesiser.** A catalog of edge-tts voice ids was correct
+#: while ``SPEECH_SYNTHESIS_PROVIDER=edge_tts``; switching the provider means switching the catalog,
+#: which is why the old ids no longer appear here — stored scenarios holding one are repaired to a
+#: catalog voice on read.
 VOICE_CATALOG: tuple[str, ...] = (
-    "en-US-AndrewMultilingualNeural",
-    "en-GB-SoniaNeural",
-    "en-US-EmmaNeural",
-    "en-GB-RyanNeural",
-    "en-US-BrianNeural",
-    "en-IN-NeerjaExpressiveNeural",
-    "en-US-AvaMultilingualNeural",
-    "en-IN-PrabhatNeural",
+    "en_US-ryan-medium",
+    "en_GB-jenny_dioco-medium",
+    "en_US-amy-medium",
+    "en_GB-alan-medium",
+    "en_US-joe-medium",
+    "en_US-hfc_female-medium",
+    "en_US-lessac-medium",
+    "en_US-hfc_male-medium",
 )
 
 

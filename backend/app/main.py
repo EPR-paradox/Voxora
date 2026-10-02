@@ -7,7 +7,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.ai.edge_tts_synthesis import build_synthesis_provider
 from app.ai.evaluation import EvaluationProvider
 from app.ai.faster_whisper_speech import build_speech_provider
 from app.ai.openai_compatible import build_roleplay_provider
@@ -15,6 +14,7 @@ from app.ai.openai_compatible_evaluation import build_evaluation_provider
 from app.ai.roleplay import RoleplayProvider
 from app.ai.speech import SpeechProvider
 from app.ai.speech_synthesis import SpeechSynthesisProvider
+from app.ai.synthesis_factory import build_synthesis_provider
 from app.api.deps import PracticeAccessError, get_database_health
 from app.api.errors import error_response
 from app.api.practice import router as practice_router

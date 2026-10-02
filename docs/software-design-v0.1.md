@@ -1,7 +1,7 @@
 # Voxora 软件设计详细规格
 
 > 产品副标题：English for the semiconductor world  
-> 文档状态：Draft v0.18（开发规格草案）  
+> 文档状态：Draft v0.19（开发规格草案）  
 > 日期：2026-10-02  
 > 产品需求来源：`../semispeak.md`  
 > 本文目标：让开发者可据此创建工程、实现数据库/API/核心流程，并编写验收测试。
@@ -724,14 +724,14 @@ Content-Type：`multipart/form-data`；字段 `audio_file`（必填）、`langua
 
 `POST /api/v1/practice/speech/synthesis`
 
-请求体 `application/json`：`{"text": "...", "voice": "en-GB-SoniaNeural"}`。`voice` 取自会话详情里 `participants[].voice`（§9），客户端不保存音色目录副本。
+请求体 `application/json`：`{"text": "...", "voice": "en_US-lessac-medium"}`。`voice` 取自会话详情里 `participants[].voice`（§9），客户端不保存音色目录副本。
 
-响应 200：**直接返回音频字节**，`Content-Type: audio/mpeg`，`Cache-Control: no-store`。不套 JSON 信封 —— 客户端要把响应直接交给播放器，包一层只会多一次解码。
+响应 200：**直接返回音频字节**，`Cache-Control: no-store`。不套 JSON 信封 —— 客户端要把响应直接交给播放器，包一层只会多一次解码。`Content-Type` 由 provider 决定（默认 Piper → `audio/wav`；edge-tts → `audio/mpeg`），客户端**按 Content-Type 决定落盘扩展名** —— 写死 `.mp3` 的播放器会拒绝 RIFF 数据。
 
 行为约定：
 
 1. 这是**输出法端点，不是消息端点**：不创建消息、不修改会话状态。会议里的发言在生成时就已入库（§7.7），把一句话读出来不产生任何新状态。
-2. **合成音频不落盘、不进数据库、不缓存**（会议草案 §9.2）：音频只作为响应体存在，服务端不留副本，也不允许端上/中间层缓存（`no-store`）。代价是重放要重新合成 —— 实测单句 1.7–2.8 秒、免费，可接受。
+2. **合成音频不落盘、不进数据库、不缓存**（会议草案 §9.2）：音频只作为响应体存在，服务端不留副本，也不允许端上/中间层缓存（`no-store`）。代价是重放要重新合成 —— 实测本机 Piper 单句 0.15–0.25 秒（首次调用另加 0.69 秒模型加载），可接受。
 3. 与会话解耦，理由同 §7.11 规则 6：读一句话不依赖场景，绑定会话是契约变更而不是加字段。
 4. 不可朗读的输入在调用供应商**之前**就拒绝：文本去空白后为空、超过 `SPEECH_SYNTHESIS_MAX_CHARS`（默认 1000，会议单条发言上限 60 词远低于此）、或 `voice` 不在服务端音色目录内，一律 422 `validation_error`。音色目录在服务端，客户端传错名字必须立刻失败，而不是变成一个「按下没反应」的按钮。
 5. 供应商超时 504 `ai_provider_timeout`，上游异常 502 `ai_provider_error`；客户端可重试同一句。
@@ -913,9 +913,10 @@ class SpeechSynthesisProvider(Protocol):
 
 `SynthesisResult` 含 `audio`（bytes）、`content_type`、`voice`、`provider`、`model`。与转写同规则：Service 只依赖协议，测试用 `FakeSpeechSynthesisProvider`（返回**可播放的静音 WAV**，不是占位字节 —— mock 模式下手机要真的能播，否则客户端 bug 会被「反正 mock」掩盖）。
 
-- **已实现（2026-10-02）**：`app/ai/speech_synthesis.py`（协议 + Fake）、`app/ai/edge_tts_synthesis.py`（实现）、`app/services/speech_synthesis.py`、`app/api/speech.py` 的 §7.13 路由。音色目录在 `app/ai/voices.py`（8 个 edge-tts 英文音色，美/英/印，男女各半），按 key 确定性分配（会议草案 §9.1）。
-- **选型：edge-tts**（第一版）。实测本机**直连可用、不需要代理**、无需密钥、免费；单句 1.7–2.8 秒。离线需求再上 piper —— 协议不变，只换实现。
-- **实测闭环（2026-10-02）**：三个音色各合成同一句 → 各自的 MP3（32/36/42 KB，5.3/6.0/7.0 秒）→ 再喂回 §7.11 转写端点 → **三个都逐字还原原文**。这条闭环同时验证了合成音频真的可播、可懂、文本正确，不是「返回了一堆字节」。
+- **已实现（2026-10-02）**：`app/ai/speech_synthesis.py`（协议 + Fake）、`app/ai/piper_synthesis.py`（本地实现，当前默认）、`app/ai/edge_tts_synthesis.py`（云端实现，保留）、`app/ai/synthesis_factory.py`（三选一：mock / piper / edge_tts）、`app/services/speech_synthesis.py`、`app/api/speech.py` 的 §7.13 路由。音色目录在 `app/ai/voices.py`（8 个 Piper 英文音色，美/英，男女各半），按 key 确定性分配（会议草案 §9.1）。
+- **选型：piper（第二版，当前默认）。** 第一版 edge-tts 的「直连可用、不需要代理」在**延迟**上不成立：实测本机单句 **6.4–10.1 秒**，其中到微软端点的 TLS 握手本身就占 3.3–4.1 秒，且会间歇性连接超时（三次测速 2.1 / 10.3 / 3.4 秒）；走代理 6.4 秒。对一个「几百毫秒」的预算，这是选型问题不是调优问题。Piper 在本机跑 ONNX 音色：**零网络、零密钥、零外部依赖**，模型加载 0.69 秒，单句合成 0.20 秒（20.7–22.0x 实时）。协议不变、只换实现 —— 这正是当初把合成藏在协议后面的目的。
+- **音色目录与合成器绑定**：`VOICE_CATALOG` 里的名字属于当前配置的合成器，因此 edge-tts id 不再出现。库里已存的旧 id 由读路径（`scenario_cast`、`participant_payloads`）确定性修复成一个目录音色，不会变成「念不出来的会话」。
+- **实测闭环（2026-10-02）**：第一版 edge-tts 三个音色各合成同一句 → 各自的 MP3（32/36/42 KB，5.3/6.0/7.0 秒）→ 再喂回 §7.11 转写端点 → **三个都逐字还原原文**。第二版 Piper 同样闭环通过：`audio/wav`、RIFF 容器合法、本地合成 0.29–1.18 秒，7.2 秒音频转写逐字还原（`en_US-lessac-medium`）。
 - 合成**不落盘、不缓存**（§7.13 规则 2，会议草案 §9.2）：服务端不留副本，响应带 `Cache-Control: no-store`。要改成缓存必须先立 ADR 回答「留多久、谁能删」。
 - 合成与转写是两个独立 provider、两个独立超时（合成 30 秒 vs 转写 180 秒），理由同前：两者的耗时形态完全相反（一句话几百毫秒 vs 一段音频几十秒）。
 
@@ -1085,6 +1086,7 @@ SPEECH_TIMEOUT_SECONDS=180
 SPEECH_MAX_SECONDS=300
 SPEECH_MAX_BYTES=33554432
 SPEECH_SYNTHESIS_PROVIDER=mock
+SPEECH_SYNTHESIS_PIPER_DIR=
 SPEECH_SYNTHESIS_TIMEOUT_SECONDS=30
 SPEECH_SYNTHESIS_MAX_CHARS=1000
 MAX_USER_MESSAGE_CHARS=4000

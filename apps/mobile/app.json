@@ -8,9 +8,12 @@
     "scheme": "voxora",
     "userInterfaceStyle": "dark",
     "ios": {
+      "bundleIdentifier": "com.eprparadox.voxora",
       "supportsTablet": true
     },
     "android": {
+      "package": "com.eprparadox.voxora",
+      "versionCode": 1,
       "adaptiveIcon": {
         "backgroundColor": "#0f1115",
         "foregroundImage": "./assets/android-icon-foreground.png",

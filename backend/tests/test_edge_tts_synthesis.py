@@ -14,8 +14,9 @@ import types
 
 import pytest
 
-from app.ai.edge_tts_synthesis import EdgeTtsSynthesisProvider, build_synthesis_provider
+from app.ai.edge_tts_synthesis import EdgeTtsSynthesisProvider
 from app.ai.speech_synthesis import SpeechSynthesisError
+from app.ai.synthesis_factory import build_synthesis_provider
 from app.core.config import settings
 
 VOICE = "en-GB-SoniaNeural"

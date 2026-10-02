@@ -83,19 +83,13 @@ class EdgeTtsSynthesisProvider:
         return bytes(audio)
 
 
-def build_synthesis_provider(settings: Settings):
-    """Pick the synthesiser from settings, failing closed on a bad configuration."""
-    from app.ai.speech_synthesis import FakeSpeechSynthesisProvider, SpeechSynthesisProvider
+def build_edge_tts_provider(settings: Settings) -> EdgeTtsSynthesisProvider:
+    """Build the edge-tts synthesiser.
 
-    if settings.speech_synthesis_provider == "mock":
-        return FakeSpeechSynthesisProvider()
-    if settings.speech_synthesis_provider != "edge_tts":
-        raise RuntimeError(
-            f"Unsupported SPEECH_SYNTHESIS_PROVIDER {settings.speech_synthesis_provider!r}: "
-            "use 'mock' or 'edge_tts'."
-        )
-
-    provider: SpeechSynthesisProvider = EdgeTtsSynthesisProvider(
+    Reached through ``app.ai.synthesis_factory``. Kept although it is no longer the default: the
+    implementation is complete and tested, and the only thing wrong with it is the network it needs
+    (measured 2026-10-02: 6.4-10.1 s per line from this machine, see ``piper_synthesis``).
+    """
+    return EdgeTtsSynthesisProvider(
         timeout_seconds=settings.speech_synthesis_timeout_seconds,
     )
-    return provider

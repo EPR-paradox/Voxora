@@ -1,8 +1,8 @@
 """Closing a session nobody spoke in (design §7.15).
 
-The bug these tests exist for: a listening-only session could be opened and never closed. `finish` builds a
-report, a report needs learner turns, and a listener has none — so the way out has to be a distinct ending
-that produces no report rather than a fake one.
+The bug these tests exist for: a listening-only session could be opened and never closed. `finish`
+builds a report, a report needs learner turns, and a listener has none — so the way out has to be a
+distinct ending that produces no report rather than a fake one.
 """
 
 from __future__ import annotations
@@ -53,11 +53,15 @@ async def test_abandoning_twice_is_the_same_answer(api: ApiHarness) -> None:
 
 
 async def test_a_session_with_learner_turns_is_not_abandoned(api: ApiHarness) -> None:
-    """Throwing away real turns would destroy a report the learner can still have; say so instead."""
+    """Throwing away real turns would destroy a report the learner can still have; say so
+    instead."""
     session = await open_meeting(api)
     sent = await api.client.post(
         f"/api/v1/practice/sessions/{session['id']}/messages",
-        json={"content": "I'd like to see the residual split by field.", "client_message_id": str(uuid4())},
+        json={
+            "content": "I'd like to see the residual split by field.",
+            "client_message_id": str(uuid4()),
+        },
     )
     assert sent.status_code == 201
 
@@ -72,7 +76,10 @@ async def test_a_completed_session_is_not_abandoned(api: ApiHarness) -> None:
     session_id = session["id"]
     await api.client.post(
         f"/api/v1/practice/sessions/{session_id}/messages",
-        json={"content": "Two weeks, if we keep the calibration pass.", "client_message_id": str(uuid4())},
+        json={
+            "content": "Two weeks, if we keep the calibration pass.",
+            "client_message_id": str(uuid4()),
+        },
     )
     finished = await api.client.post(
         f"/api/v1/practice/sessions/{session_id}/finish", json={"client_finish_id": str(uuid4())}
@@ -98,7 +105,10 @@ async def test_abandoning_a_finished_session_keeps_its_report(api: ApiHarness) -
     session_id = session["id"]
     await api.client.post(
         f"/api/v1/practice/sessions/{session_id}/messages",
-        json={"content": "Two weeks, if we keep the calibration pass.", "client_message_id": str(uuid4())},
+        json={
+            "content": "Two weeks, if we keep the calibration pass.",
+            "client_message_id": str(uuid4()),
+        },
     )
     await api.client.post(
         f"/api/v1/practice/sessions/{session_id}/finish", json={"client_finish_id": str(uuid4())}

@@ -779,3 +779,58 @@ chip，凭空造一个新值只会多一个没人要的筛选。真 provider 实
 `async def advance_meeting(` 的签名被拼成两行，缩进全错）。已手工修回并 `py_compile` 验证。结论写进 skill：
 这个脚本**不该再用**；真要折行，逐行手写 + 长度断言 + `py_compile` + 跑测试。
 
+## 2026-10-02（语音输出 6.6d）：合成器换成 Piper，API 出公网
+
+edge-tts 的连通性没问题，**延迟**不行。实测本机单句 **6.4–10.1 秒**（到微软端点的 TLS 握手本身就占
+3.3–4.1 秒，走代理 4.1 秒），第三次直接连接超时。对一个「几百毫秒」的预算，这是选型问题，不是调优问题。
+
+换成 **Piper**（`piper-tts` 1.8.0，ONNX 推理，在本机跑）：
+
+```
+模型加载              0.69s
+4.3s 音频合成         0.20s     （20.7–22.0x 实时，三次）
+API TTFB              0.15s     （模型已载）/ 0.86–1.02s（首次，含加载）
+```
+
+- 新增 `app/ai/piper_synthesis.py`：惰性加载（63 MB ONNX + 一个 onnxruntime session 不该待在启动路径上）；
+  每个音色一个 session 并缓存；合成走 `asyncio.to_thread`（onnxruntime 放 GIL、espeak 音素化不放）；
+  输出 WAV（22050Hz / 16bit / mono）。**未知或未下载的音色降级到默认音色，而不是拒读** —— 音色是装饰，
+  一条在改名之前写下的场景记录仍然要能念出来。
+- 新增 `app/ai/synthesis_factory.py`：三选一（mock / piper / edge_tts）。edge-tts 实现**保留**（完整且有测试），
+  错的只是它需要的网络。
+- `app/ai/voices.py`：`VOICE_CATALOG` 从 edge-tts id 换成 8 个 Piper 音色。**目录里的名字属于当前的合成器**，
+  换 provider 就必须换目录；库里已存的旧 id 由读路径（`scenario_cast`、`participant_payloads`）确定性修复。
+- `infra/run-api.sh`：正经启动脚本。之前那个实例是某次会话用 `~/.hermes/cache/scratch/` 里的临时脚本起的
+  （scratch 目录 24 小时回收），重启即失。脚本从 `~/.hermes/.env` 读 key 并以环境变量注入 —— 不落仓库、
+  不进日志。
+- `pyproject.toml` 补 `[project.optional-dependencies] speech`：`faster-whisper` / `piper-tts` / `edge-tts`
+  这三个此前只活在 venv 里，依赖声明里根本没有。
+- 顺手修掉：`.venv/bin/{pip,pip3,pip-3.10,pip3.10,activate*}` 的 shebang 还指向项目改名前的
+  `SimiSpeak` 路径，`./.venv/bin/pip` 直接报 bad interpreter（用 `python -m pip` 才绕过）。
+
+### 公网暴露（Cloudflare Tunnel）
+
+目标是「出门也能用」，所以后端必须离开局域网。
+
+- `main.py` 拒绝 `app_env != "local"` 启动（§12 的门），因此**不改代码也能安全暴露**的前提是：uvicorn
+  默认信任来自 127.0.0.1 的 `X-Forwarded-For`。cloudflared 跑在本机，转发进来的请求
+  `request.client.host` 会被改写成真实公网 IP，`is_loopback` 判否，Bearer token 守卫自动生效。**验证口径**：
+  `curl -H "X-Forwarded-For: 203.0.113.7" .../api/v1/scenarios` 必须 401；返回 200 就说明 tunnel 完全敞开。
+  （`/api/v1/health` 不能拿来验这条 —— 它不挂 `require_practice_access`。）
+- quick tunnel 的域名每次重启都会变，而 `EXPO_PUBLIC_API_BASE_URL` 是打包期注入的 —— 想要一个固定的 APK，
+  必须先有固定域名。
+- **本机测 tunnel 会被 Mihomo 的 fake-ip 骗**：所有域名（连发给 `223.5.5.5` 的查询）都解析成 `198.18.0.x`，
+  curl 报 `SSL routines::unexpected eof while reading`，看起来像被墙。用
+  `--resolve <host>:443:<真实 CF IP>` 绕过即得 200。手机没有 Mihomo、解析正常，所以**本机连不上的结论
+  对手机无效**。
+
+### 验证
+
+```
+ruff check / format     干净
+pytest                  281 → 290（test_piper_synthesis.py 8 条 + 工厂 2 条）
+闭环（真 provider）
+  本地   3 个音色 → audio/wav → RIFF 合法 → 转写逐字还原
+  公网   合成 200 audio/wav 319 KB 4.32s ／ 转写 200 逐字还原 10.2s
+```
+

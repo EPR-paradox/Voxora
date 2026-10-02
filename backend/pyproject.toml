@@ -17,6 +17,15 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Speech is optional and heavy: the models run to hundreds of megabytes, and neither running the
+# test suite nor working on the API needs them. Install with `pip install -e ".[speech]"`.
+# `faster_whisper` transcribes (design §7.11), `piper-tts` speaks locally (§7.13, the default),
+# `edge-tts` is the cloud synthesiser kept as an alternative implementation.
+speech = [
+    "edge-tts>=7,<8",
+    "faster-whisper>=1.2,<2",
+    "piper-tts>=1.8,<2",
+]
 dev = [
     "aiosqlite>=0.20,<1",
     "httpx>=0.27,<1",
