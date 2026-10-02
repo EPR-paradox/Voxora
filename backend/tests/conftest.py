@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.ai.evaluation import EvaluationProvider, FakeEvaluationProvider
 from app.ai.roleplay import FakeRoleplayProvider, RoleplayProvider
+from app.ai.speech import FakeSpeechProvider, SpeechProvider
 from app.core.config import settings
 from app.db.base import Base
 from app.db.models import Scenario, User
@@ -66,6 +67,7 @@ async def build_harness(
     *,
     roleplay_provider: RoleplayProvider | None = None,
     evaluation_provider: EvaluationProvider | None = None,
+    speech_provider: SpeechProvider | None = None,
     client_address: tuple[str, int] = ("127.0.0.1", 12345),
 ) -> AsyncIterator[ApiHarness]:
     engine = create_async_engine(database_url)
@@ -89,6 +91,7 @@ async def build_harness(
         database_url=database_url,
         roleplay_provider=roleplay_provider or FakeRoleplayProvider(),
         evaluation_provider=evaluation_provider or FakeEvaluationProvider(),
+        speech_provider=speech_provider or FakeSpeechProvider(),
     )
     async with app.router.lifespan_context(app):
         transport = ASGITransport(app=app, client=client_address)
@@ -110,11 +113,14 @@ def build_api(tmp_path):
 
     @asynccontextmanager
     async def _build(
-        *, roleplay_provider=None, evaluation_provider=None
+        *, roleplay_provider=None, evaluation_provider=None, speech_provider=None
     ) -> AsyncIterator[ApiHarness]:
         url = f"sqlite+aiosqlite:///{tmp_path / f'api-{next(counter)}.db'}"
         async with build_harness(
-            url, roleplay_provider=roleplay_provider, evaluation_provider=evaluation_provider
+            url,
+            roleplay_provider=roleplay_provider,
+            evaluation_provider=evaluation_provider,
+            speech_provider=speech_provider,
         ) as harness:
             yield harness
 

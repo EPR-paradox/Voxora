@@ -48,6 +48,34 @@ class Settings(BaseSettings):
     # budget near the average yields an empty or truncated answer, so the default keeps headroom.
     ai_evaluation_max_tokens: int = 4000
 
+    # Speech-to-text (design §8.6, §7.11). ``mock`` keeps tests and offline development free of
+    # model
+    # downloads; ``faster_whisper`` runs on this machine — GPU when the libraries are present, CPU
+    # int8
+    # otherwise.
+    speech_provider: str = "mock"
+    speech_model: str = "small.en"
+    speech_device: str = "auto"  # auto | cpu | cuda
+    speech_compute_type: str = "int8"
+    # Transcription must NOT reuse ``ai_timeout_seconds``: a 300 s clip takes minutes to decode on
+    # the
+    # CPU fallback path, so a 30 s budget is a guaranteed 504 (§8.6). Pinned by measurement.
+    speech_timeout_seconds: float = 180.0
+    speech_max_seconds: int = 300
+    speech_max_bytes: int = 32 * 1024 * 1024
+    # §7.11 rule 3: m4a/AAC is what the phone records; the rest are here so a shared file works too.
+    speech_allowed_content_types: list[str] = [
+        "audio/m4a",
+        "audio/x-m4a",
+        "audio/mp4",
+        "audio/aac",
+        "audio/wav",
+        "audio/x-wav",
+        "audio/mpeg",
+        "audio/mp3",
+        "audio/ogg",
+    ]
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 

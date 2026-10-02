@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.ai.evaluation import EvaluationProvider
 from app.ai.roleplay import RoleplayProvider
+from app.ai.speech import SpeechProvider
 from app.core.config import settings
 
 
@@ -44,6 +45,10 @@ def get_roleplay_provider(request: Request) -> RoleplayProvider:
 
 def get_evaluation_provider(request: Request) -> EvaluationProvider:
     return request.app.state.evaluation_provider
+
+
+def get_speech_provider(request: Request) -> SpeechProvider:
+    return request.app.state.speech_provider
 
 
 def require_practice_access(request: Request) -> None:

@@ -27,6 +27,7 @@ PROTECTED_ROUTES = [
     ("GET", "/api/v1/review-items"),
     ("GET", "/api/v1/review-items/00000000-0000-0000-0000-000000000003"),
     ("POST", "/api/v1/review-items"),
+    ("POST", "/api/v1/practice/speech/transcriptions"),
     ("PATCH", "/api/v1/review-items/00000000-0000-0000-0000-000000000003"),
 ]
 

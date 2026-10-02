@@ -8,14 +8,17 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.ai.evaluation import EvaluationProvider
+from app.ai.faster_whisper_speech import build_speech_provider
 from app.ai.openai_compatible import build_roleplay_provider
 from app.ai.openai_compatible_evaluation import build_evaluation_provider
 from app.ai.roleplay import RoleplayProvider
+from app.ai.speech import SpeechProvider
 from app.api.deps import PracticeAccessError, get_database_health
 from app.api.errors import error_response
 from app.api.practice import router as practice_router
 from app.api.review import router as review_router
 from app.api.scenarios import router as scenarios_router
+from app.api.speech import router as speech_router
 from app.core.config import settings
 
 
@@ -23,6 +26,7 @@ def create_app(
     database_url: str | None = None,
     roleplay_provider: RoleplayProvider | None = None,
     evaluation_provider: EvaluationProvider | None = None,
+    speech_provider: SpeechProvider | None = None,
 ) -> FastAPI:
     """Build the application.
 
@@ -47,8 +51,10 @@ def create_app(
         app.state.session_factory = async_sessionmaker(engine, expire_on_commit=False)
         roleplay = roleplay_provider or build_roleplay_provider(settings)
         evaluation = evaluation_provider or build_evaluation_provider(settings)
+        speech = speech_provider or build_speech_provider(settings)
         app.state.roleplay_provider = roleplay
         app.state.evaluation_provider = evaluation
+        app.state.speech_provider = speech
         try:
             yield
         finally:
@@ -56,6 +62,8 @@ def create_app(
                 await roleplay.aclose()
             if evaluation_provider is None:
                 await evaluation.aclose()
+            if speech_provider is None:
+                await speech.aclose()
             await engine.dispose()
 
     app = FastAPI(title="Voxora API", version=settings.app_version, lifespan=lifespan)
@@ -69,6 +77,7 @@ def create_app(
     app.include_router(scenarios_router)
     app.include_router(practice_router)
     app.include_router(review_router)
+    app.include_router(speech_router)
 
     @app.exception_handler(PracticeAccessError)
     async def handle_practice_access_error(
