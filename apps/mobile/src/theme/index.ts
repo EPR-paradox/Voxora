@@ -70,6 +70,20 @@ export const categoryLabels: Record<string, string> = {
   daily_life: "生活",
 };
 
+/**
+ * Stable colour per participant (meeting mode): with three voices on screen, colour is what makes
+ * "who is talking" readable at a glance. Derived from the key, so it survives renames.
+ */
+export const speakerColors = ["#4f8cff", "#e0a33e", "#3fb56b", "#c07ae0"] as const;
+
+export function speakerColor(key: string): string {
+  let hash = 0;
+  for (let index = 0; index < key.length; index += 1) {
+    hash = (hash * 31 + key.charCodeAt(index)) % 997;
+  }
+  return speakerColors[hash % speakerColors.length];
+}
+
 export const reviewItemTypeLabels: Record<string, string> = {
   expression: "表达",
   grammar: "语法",

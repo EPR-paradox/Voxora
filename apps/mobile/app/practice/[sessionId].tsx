@@ -19,7 +19,7 @@ import { newClientMessageId } from "../../src/api/client";
 import { ApiError, describeError } from "../../src/api/errors";
 import { finishSession } from "../../src/features/evaluation/api";
 import { getSession, sendMessage } from "../../src/features/practice/api";
-import { colors, radius, spacing, typography } from "../../src/theme";
+import { colors, radius, spacing, speakerColor, typography } from "../../src/theme";
 
 interface OutboxItem {
   clientMessageId: string;
@@ -104,27 +104,36 @@ export default function PracticeScreen() {
   const messages = sessionQuery.data?.messages ?? [];
   const session = sessionQuery.data;
 
-  const rows = useMemo(
-    () => [
-      ...messages.map((message) => ({
-        key: message.id,
-        role: message.role,
-        content: message.content,
-        pending: message.status === "pending",
-        failed: message.status === "failed",
-        local: false,
-      })),
-      ...outbox.map((item) => ({
-        key: item.clientMessageId,
-        role: "user" as const,
-        content: item.content,
-        pending: !item.failed,
-        failed: item.failed,
-        local: true,
-      })),
-    ],
-    [messages, outbox],
-  );
+  // A meeting puts several participants in one turn, so every row carries who said it and whether it
+  // starts a new speaker run. Consecutive lines from one person are drawn as a group; otherwise three
+  // voices in a row look like one long wall of text.
+  const rows = useMemo(() => {
+    const serverRows = messages.map((message) => ({
+      key: message.id,
+      role: message.role,
+      speakerKey: message.speaker_key,
+      speakerName: message.speaker?.name ?? null,
+      content: message.content,
+      pending: message.status === "pending",
+      failed: message.status === "failed",
+      local: false,
+    }));
+    const localRows = outbox.map((item) => ({
+      key: item.clientMessageId,
+      role: "user" as const,
+      speakerKey: "",
+      speakerName: null,
+      content: item.content,
+      pending: !item.failed,
+      failed: item.failed,
+      local: true,
+    }));
+    const all = [...serverRows, ...localRows];
+    return all.map((row, index) => ({
+      ...row,
+      startsSpeaker: index === 0 || all[index - 1].speakerKey !== row.speakerKey,
+    }));
+  }, [messages, outbox]);
 
   if (sessionQuery.isPending) {
     return (
@@ -164,6 +173,19 @@ export default function PracticeScreen() {
         }}
       />
 
+      {session.participants.length > 1 ? (
+        <View style={styles.participants}>
+          {session.participants.map((participant) => (
+            <View key={participant.key} style={styles.participant}>
+              <View
+                style={[styles.participantDot, { backgroundColor: speakerColor(participant.key) }]}
+              />
+              <Text style={styles.participantName}>{participant.name}</Text>
+            </View>
+          ))}
+        </View>
+      ) : null}
+
       <FlatList
         ref={listRef}
         data={rows}
@@ -171,8 +193,21 @@ export default function PracticeScreen() {
         contentContainerStyle={styles.listContent}
         onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: true })}
         renderItem={({ item }) => (
-          <View style={[styles.bubble, item.role === "user" ? styles.userBubble : styles.aiBubble]}>
-            <Text style={styles.bubbleLabel}>{item.role === "user" ? "你" : session.scenario.title}</Text>
+          <View
+            style={[
+              styles.bubble,
+              item.role === "user" ? styles.userBubble : styles.aiBubble,
+              item.role === "assistant" && !item.startsSpeaker ? styles.groupedBubble : null,
+              item.role === "assistant" && item.speakerKey
+                ? { borderLeftColor: speakerColor(item.speakerKey), borderLeftWidth: 3 }
+                : null,
+            ]}
+          >
+            {item.role === "user" ? (
+              <Text style={styles.bubbleLabel}>你</Text>
+            ) : item.startsSpeaker ? (
+              <Text style={styles.bubbleLabel}>{item.speakerName ?? session.scenario.title}</Text>
+            ) : null}
             <Text style={styles.bubbleText}>{item.content}</Text>
             {item.pending ? <Text style={styles.bubbleStatus}>发送中…</Text> : null}
             {item.failed ? (
@@ -233,6 +268,21 @@ const styles = StyleSheet.create({
   bubble: { borderRadius: radius.lg, padding: spacing.md, gap: spacing.xs, maxWidth: "92%" },
   userBubble: { alignSelf: "flex-end", backgroundColor: colors.accent },
   aiBubble: { alignSelf: "flex-start", backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border },
+  // Same speaker continuing: tighter, and the name is not repeated.
+  groupedBubble: { marginTop: -spacing.sm },
+  participants: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: spacing.md,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+    backgroundColor: colors.surfaceMuted,
+  },
+  participant: { flexDirection: "row", alignItems: "center", gap: spacing.xs },
+  participantDot: { width: 8, height: 8, borderRadius: 4 },
+  participantName: { ...typography.caption, color: colors.text },
   bubbleLabel: { ...typography.caption, color: colors.textMuted, opacity: 0.9 },
   bubbleText: { ...typography.body, color: colors.text, lineHeight: 22 },
   bubbleStatus: { ...typography.caption, color: colors.textMuted },

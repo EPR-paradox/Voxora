@@ -9,7 +9,7 @@ import { ErrorView, LoadingView } from "../../src/components/StateViews";
 import { describeError } from "../../src/api/errors";
 import { createSession } from "../../src/features/practice/api";
 import { getScenario } from "../../src/features/scenarios/api";
-import { categoryLabels, colors, spacing, typography } from "../../src/theme";
+import { categoryLabels, colors, spacing, speakerColor, typography } from "../../src/theme";
 
 export default function ScenarioDetailScreen() {
   const { scenarioId } = useLocalSearchParams<{ scenarioId: string }>();
@@ -65,6 +65,22 @@ export default function ScenarioDetailScreen() {
         <Text style={styles.body}>{scenario.situation}</Text>
       </Card>
 
+      {scenario.cast && scenario.cast.length > 1 ? (
+        <Card title="这场会议有谁">
+          {scenario.cast.map((participant) => (
+            <View key={participant.key} style={styles.participantRow}>
+              <View
+                style={[styles.participantDot, { backgroundColor: speakerColor(participant.key) }]}
+              />
+              <Text style={styles.participantText}>
+                {participant.name}
+                {participant.title ? ` · ${participant.title}` : ""}
+              </Text>
+            </View>
+          ))}
+        </Card>
+      ) : null}
+
       <Card title="对方是谁">
         <Text style={styles.body}>
           {character?.name ?? "面试官"}
@@ -103,6 +119,9 @@ export default function ScenarioDetailScreen() {
 }
 
 const styles = StyleSheet.create({
+  participantRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  participantDot: { width: 8, height: 8, borderRadius: 4 },
+  participantText: { ...typography.body, color: colors.text },
   title: { ...typography.title, color: colors.text },
   summary: { ...typography.body, color: colors.textMuted, marginTop: spacing.sm, lineHeight: 22 },
   badges: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm, marginVertical: spacing.lg },

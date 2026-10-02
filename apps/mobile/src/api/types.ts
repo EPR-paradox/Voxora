@@ -52,6 +52,8 @@ export interface ScenarioDetail extends ScenarioSummary {
   ai_character: AiCharacter;
   user_objective: string;
   target_expressions: TargetExpression[];
+  /** Participants of a meeting scenario; null means a single-character scenario. */
+  cast: ScenarioParticipant[] | null;
 }
 
 export interface ScenarioReference {
@@ -66,11 +68,26 @@ export interface ScenarioListResponse {
   offset: number;
 }
 
+/**
+ * One person in the room (design §7.4 / meeting-mode §4). `key` is what messages carry; `name` and
+ * `title` are display data taken from the session's own snapshot.
+ */
+export interface ScenarioParticipant {
+  key: string;
+  name: string;
+  title: string;
+}
+
 export interface PracticeMessage {
   id: string;
   client_message_id?: string | null;
   turn_index: number;
+  /** Display order inside the session: sort by this, not by array position (meeting-mode §3). */
+  seq: number;
   role: MessageRole;
+  /** "" for the learner, otherwise a participant key. Never null. */
+  speaker_key: string;
+  speaker: ScenarioParticipant | null;
   content: string;
   created_at: string;
 }
@@ -82,7 +99,10 @@ export interface PracticeMessageDetail extends PracticeMessage {
 export interface OpeningMessage {
   id: string;
   turn_index: number;
+  seq: number;
   role: "assistant";
+  speaker_key: string;
+  speaker: ScenarioParticipant | null;
   content: string;
   status: "completed";
 }
@@ -92,6 +112,8 @@ export interface PracticeSessionCreated {
   scenario: ScenarioReference;
   status: "active";
   input_mode: "text";
+  /** Who is in the room. One entry for a single-character scenario, two or three in a meeting. */
+  participants: ScenarioParticipant[];
   messages: OpeningMessage[];
   started_at: string;
 }
@@ -103,6 +125,7 @@ export interface PracticeSessionDetail {
   input_mode: "text" | "voice";
   scenario_version: number;
   turn_count: number;
+  participants: ScenarioParticipant[];
   messages: PracticeMessageDetail[];
   started_at: string;
   completed_at: string | null;
@@ -128,7 +151,8 @@ export interface PracticeSessionListResponse {
 
 export interface SendPracticeMessageResponse {
   user_message: PracticeMessage;
-  assistant_message: PracticeMessage;
+  /** Always a list: a meeting answers with one turn per participant that speaks (meeting-mode §5). */
+  assistant_messages: PracticeMessage[];
   session_status: "active";
 }
 
