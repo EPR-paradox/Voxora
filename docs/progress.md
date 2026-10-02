@@ -435,3 +435,42 @@ en-IN-NeerjaExpressiveNeural    200 audio/mpeg no-store  41904 B  1.7s
 - Metro 已用 `--clear` 重启（pid 在 8081），手机侧需要硬重载（从最近任务划掉再开，切前后台不算）。
 - 真机验收待做：播放是否出声、开麦是否真的停播、临时文件是否被清掉。
 
+## 2026-10-02（真机联调）：开麦报「连不上后端」的真因
+
+真机症状：播放正常（`/speech/synthesis` 200），一点开麦就提示「连不上后端，检查网络或服务是否在跑」，
+而服务器日志里**手机从来没请求过 `/speech/transcriptions`**（其他请求全部 200/201）。
+
+排查路径（都靠证据，不靠猜）：
+
+1. 错误文案对应 `NetworkError`（fetch 被拒），不是 4xx/5xx —— 后端根本没被联系上。
+2. 手机聊天请求全部正常 → 排除 base URL / token / 局域网。
+3. 在 `useVoiceInput` 里把 clip 的 URI 与字节数打到 `console.warn`，手机端日志出现在 Metro 日志里：
+
+```
+[voice] clip file:///data/user/0/host.exp.exponent/cache/.../recording-ef4d...m4a (80841 bytes)
+[voice] transcription failed [NetworkError: Unsupported FormDataPart implementation]
+```
+
+真因：**Expo SDK 57 用的是 expo 自己的 fetch**，其 multipart 写入器
+（`node_modules/expo/src/winter/fetch/convertFormData.ts`）只接受三种部件：`string`、`instanceof Blob`、
+或**带 `bytes()` 方法的对象**。旧的 React Native 写法 `{ uri, name, type }` 三者都不是，直接抛错；这个错误
+在客户端表现为网络失败，于是文案说「连不上后端」。
+
+修法：`src/features/speech/api.ts` 的 `clipFormPart()` 改成 `{ bytes: () => new File(uri).bytes(), name, type }`
+（`name` / `type` 会成为部件在网线上的 `Content-Disposition` / `Content-Type`，服务端正是按这两者选解析器）。
+同时保留 `normalizeClipUri()`（无 scheme 的路径补 `file://`）与 `clipSize()`（空文件提前报明确错误）。
+
+**验证（不靠手机）**：把 expo 的 `convertFormData.ts` 复制到 scratch（Node 拒绝 strip `node_modules` 里的 TS），
+用手写的 RN-FormData 替身驱动它（Node 原生 FormData 会把非 Blob 值强转成字符串，复现不了 RN 行为），再把生成的
+字节 POST 给真实 API：
+
+```
+legacy {uri,name,type}        → Unsupported FormDataPart implementation   （手机上的同一条错误）
+fixed  {bytes,name,type}      → body 104948 B → HTTP 200，转写文字正确
+```
+
+`tsc` 干净，`expo export --platform android` 成功且产物含 `clipFormPart`。提交 `b7c2249`。
+
+顺带一条教训：手机是黑盒，但 **Metro 日志就是它的 console** —— `console.warn` 出来的东西能直接读到；
+遇到「手机上说网络不通、服务器却一条请求都没收到」时，先怀疑请求体，再怀疑网络。
+
