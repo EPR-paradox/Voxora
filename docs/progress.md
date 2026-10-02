@@ -291,3 +291,57 @@ Phase 6 级别的产品变更（不是给 Phase 5 加个接口），范围定为
 
 **规格同步**：主规格升 Draft v0.10（§6.3 表、§7.4、§7.6、§7.7、§9.3、§10.1）；会议草案升到记录实测与修正后的
 客户端方案。`ruff check` / `ruff format --check` 全过；`pytest -q` 197 passed。
+
+## 2026-10-02（深夜）语音输入（Phase 5 的一半）：§7.11 端点 + 手机上的开麦
+
+用户要求语音输入与语音输出都要。先做语音输入。
+
+### 后端：转写端点（§7.11 / §8.6）
+
+- `app/ai/speech.py`：`SpeechProvider` 协议 + `TranscriptResult` + `FakeSpeechProvider`；`SpeechNotRecognized`
+  → 422 `speech_not_recognized`（不是空文本 —— 空消息比「请再说一遍」更糟）。
+- `app/ai/faster_whisper_speech.py`：本机实现。模型**首次使用时加载**（不拖累 pytest 与启动）；解码跑在线程里
+  （`transcribe` 返回的是生成器，迭代时才解码，放在事件循环上会冻住所有请求）；不启用 VAD；Whisper 在静音上会
+  幻觉出 "Thank you."，所以按模型自己的 `no_speech_prob` 丢掉疑似无语音片段，全被丢掉就报 422。
+- `app/api/speech.py`：`POST /api/v1/practice/speech/transcriptions`（multipart，字段 `audio_file` /
+  `language` / `duration_ms`）。上传按上限**流式读取**，超限直接 413，不先把 200 MB 落盘。音频不落库、不进日志、
+  不进任何消息（§7.11 规则 1/2/7），响应只有文本与元数据。
+- 配置：`SPEECH_PROVIDER`（mock/faster_whisper）、`SPEECH_MODEL=small.en`、`SPEECH_DEVICE=auto`、
+  `SPEECH_COMPUTE_TYPE=int8`、`SPEECH_TIMEOUT_SECONDS=180`（**不能**复用 `AI_TIMEOUT_SECONDS`，§8.6 已写明）、
+  `SPEECH_MAX_SECONDS=300`、`SPEECH_MAX_BYTES`。`.env.example` 与规格 §11.1 同步。
+- 测试 197 → 208：新增 `test_speech_transcriptions.py`（成功路径、413/415/422/502/504、空上传、错误响应不含内部
+  路径，以及「转写不写任何东西」—— 断言会话表与消息表都还是 0）与 `test_faster_whisper_speech.py`（CUDA 失败
+  回退、静音、超时、模型只加载一次）。
+
+### 实测（这台机器）
+
+```
+edge-tts 生成测试音频：17.4 秒 / 313 秒（顺带证明云 TTS 直连可用，不需要代理）
+small.en + CPU int8（i5-10300H 8 线程）：
+  17.4s 音频 → 1.7s  （10.0x 实时）
+  313s 音频 → 26.9s  （11.6x 实时），转写文字与合成原文逐字一致
+结论：SPEECH_TIMEOUT_SECONDS=180 对 300 秒上限有约 6.7 倍余量，保留。
+```
+
+**踩到的坑**：CTranslate2 按自己的构建参数声称 CUDA 可用，不看机器上有没有运行库 —— `SPEECH_DEVICE=auto`
+会选中 CUDA、模型加载成功、然后在第一次编码时抛 `libcublas.so.12 is not found`。若不管，配错一次之后每段音频
+都是 502。现在推理期捕获缺库错误 → CPU 重建模型重跑同一段（有测试）。CUDA 运行库（`nvidia-cublas-cu12` /
+`nvidia-cudnn-cu12`，约 1.2 GB）仍在下载，装好后补测 GPU 路径耗时。
+
+### 客户端：对话页的开麦按钮（§10.4）
+
+- `src/features/speech/useVoiceInput.ts`：开麦/闭麦 toggle；300 秒硬上限（最后 30 秒变色提示）；系统中断
+  （切后台/来电/音频焦点被抢）由 SDK 的状态回调触发「结束并转写」，**已录内容不丢**；失败时保留音频文件，
+  「重试同一段」重传同一文件；权限被拒则本会话不再弹窗、退回打字。
+- `src/api/client.ts` 新增 `apiUpload`（multipart；刻意不设 Content-Type，让 fetch 自己写 boundary），
+  并把响应处理抽成 `unwrap`；转写超时单独设为 240 秒 —— 必须比服务端的 180 秒更长，否则客户端会在答案到达前
+  自己放弃。取消上传真的会 abort（新增 `AbortError`，与「失败」区分）。
+- 对话页：录音时输入框与发送按钮禁用、红色电平条 + 计时；转写中显示「识别中…」并可取消；失败显示「重试同一段 /
+  重新录」；会议场景（`participants > 1`）**转写完直接发出**，单角色场景回填输入框让人先改错 —— 这条差异就是
+  §0.1 / §10.4 里定下的会议例外。`tsc --noEmit` 干净。
+
+### 还没做
+
+- 语音输出（TTS）：每个与会者一个音色 + 播放队列 + 开麦时停播 + 「输出音频是否缓存」的隐私决策。
+- 真机验收：开麦、300 秒上限、中断、会议自动发送都还没在真机上跑过。
+- GPU 路径实测（等 CUDA 库下载完成）。

@@ -822,6 +822,9 @@ class SpeechProvider(Protocol):
 
 - **服务端转写，不做设备端。** 两个理由：一是国内 Android 机型普遍缺少可用的系统语音服务，设备端方案的可用性不成立；二是 §3.1 已定客户端不持有模型与密钥，端上跑 Whisper 还要把模型塞进安装包。
 - 本期实现为本机 `faster-whisper`（CUDA，量化推理）。个人使用阶段音频不出本机，无 per-minute 成本，也不依赖境外网络。GPU 不可用时回退 CPU 或更小模型，由配置决定。
+- **已实现（2026-10-02）**：`app/ai/speech.py`（协议 + Fake）、`app/ai/faster_whisper_speech.py`（本机实现）、`app/api/speech.py`（§7.11 端点）。默认 `SPEECH_MODEL=small.en`、`SPEECH_COMPUTE_TYPE=int8`；模型首次使用时加载（不是 import 时），解码跑在线程里，空闲不占 GPU。
+- **实测（2026-10-02，i5-10300H 8 线程，small.en / CPU int8）**：17.4 秒音频 1.7 秒转完（10.0x 实时），313 秒音频 26.9 秒转完（11.6x 实时），文字与合成原文逐字一致。据此 `SPEECH_TIMEOUT_SECONDS=180` 对 300 秒上限有约 6.7 倍余量，保留该值。
+- **CUDA 路径的坑**：CTranslate2 按自身构建参数判定 CUDA 可用性，不看机器上有没有运行库 —— 实测 `SPEECH_DEVICE=auto` 会选中 CUDA、模型加载成功、然后在第一次编码时抛 `libcublas.so.12 is not found`。实现因此在推理期捕获「缺库」错误并在 CPU 上重建模型重跑同一段音频（有测试盯着），避免配错一次之后每段音频都 502。
 - 云 STT 不属本期实现，但协议保持供应商无关：换云服务只需新增一个 `SpeechProvider` 实现，API 契约不变。
 - 转写与 Roleplay / Evaluation 是彼此独立的 provider，超时分别配置；转写失败不得映射为会话状态变化。
 - 转写超时不得沿用 Roleplay 的 AI_TIMEOUT_SECONDS：§7.11 允许单段 300 秒音频，CPU 回退路径下顺序解码可达分钟级，30 秒级超时是必然失败。用独立的 SPEECH_TIMEOUT_SECONDS，初值在 Phase 5 按实测最坏耗时上浮后写定；超时返回 504，客户端可重试同一段音频。
@@ -927,6 +930,7 @@ apps/mobile/src/
 - 录音状态必须显式可视化：红色激活态 + 计时 + 电平。这是原来由手指按住提供的物理反馈的替代，不是装饰。
 - 录音期间禁用该会话的输入框与发送按钮，避免“边录边说边发”的状态歧义。
 - 300 秒是设计值，不是实测值：本机为 GTX 1660 Ti（6 GB） + i5-10300H（4 核 8 线程），Phase 5 必须分别实测 GPU 路径与 CPU 回退路径下转写 300 秒音频的耗时与显存/内存占用。若单段耗时超出可接受范围，回退上限或改为分段上传；不得用静默截断音频来掩盖。
+  - **实测（2026-10-02）**：CPU 回退路径（small.en / int8）转 313 秒音频耗时 26.9 秒（11.6x 实时），300 秒上限保留。GPU 路径待 CUDA 运行库装好后补测（缺库时的行为见 §8.6）。
 - 不做后台录音：切后台或锁屏即结束录音并转入转写（见上一条），因此不申请 Android 前台服务，也不需要 Android 14 的前台服务类型声明。转写若在切后台时尚未完成，回前台后接续显示“识别中”。
 - 整段转写不需要客户端切分：faster-whisper 内部按固定窗口顺序解码长音频，客户端只上传一个文件。把“一次开麦”拆成多段转写再拼接是体验改动，须先改本节。
 - 本版不做语音活动检测（VAD）自动断句：静音自动停止会引入“一句话说到一半被截断”的新失败模式，且属于 §1.4 排除的范围。若 300 秒上限在真实使用中频繁触发，再单独评估。
@@ -960,12 +964,13 @@ AI_MAX_TOKENS=400
 AI_JSON_MODE=true
 AI_EVALUATION_TIMEOUT_SECONDS=60
 AI_EVALUATION_MAX_TOKENS=4000
-SPEECH_PROVIDER=faster_whisper
-SPEECH_MODEL=distil-large-v3
+SPEECH_PROVIDER=mock
+SPEECH_MODEL=small.en
 SPEECH_DEVICE=auto
+SPEECH_COMPUTE_TYPE=int8
 SPEECH_TIMEOUT_SECONDS=180
-MAX_AUDIO_SECONDS=300
-MAX_AUDIO_MB=32
+SPEECH_MAX_SECONDS=300
+SPEECH_MAX_BYTES=33554432
 MAX_USER_MESSAGE_CHARS=4000
 MAX_CONTEXT_MESSAGES=24
 LOG_LEVEL=INFO
