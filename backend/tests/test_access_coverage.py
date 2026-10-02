@@ -25,6 +25,7 @@ PROTECTED_ROUTES = [
         "/api/v1/practice/sessions/00000000-0000-0000-0000-000000000002/evaluation/retry",
     ),
     ("GET", "/api/v1/review-items"),
+    ("GET", "/api/v1/review-items/00000000-0000-0000-0000-000000000003"),
     ("POST", "/api/v1/review-items"),
     ("PATCH", "/api/v1/review-items/00000000-0000-0000-0000-000000000003"),
 ]

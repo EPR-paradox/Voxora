@@ -17,7 +17,12 @@ from app.review_schemas import (
     ReviewItemUpdateRequest,
 )
 from app.services.practice import PracticeError
-from app.services.review import create_review_item, list_review_items, update_review_item
+from app.services.review import (
+    create_review_item,
+    get_review_item,
+    list_review_items,
+    update_review_item,
+)
 
 router = APIRouter(
     prefix="/api/v1/review-items",
@@ -54,6 +59,29 @@ async def read_review_items(
         limit=limit,
         offset=offset,
     )
+
+
+@router.get("/{item_id}", response_model=ReviewItemResponse)
+async def read_review_item(
+    item_id: UUID,
+    request: Request,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> ReviewItemResponse | JSONResponse:
+    """One item by id (§7.10).
+
+    The detail page must survive a cold start: a deep link or a reloaded app has no list in memory,
+    so it reads the item directly instead of searching a list it happens to have cached.
+    """
+    try:
+        item = await get_review_item(session, item_id=item_id)
+    except PracticeError as exc:
+        return error_response(
+            request,
+            status_code=exc.status_code,
+            code=exc.code,
+            message=exc.message,
+        )
+    return ReviewItemResponse.model_validate(item)
 
 
 @router.post("", response_model=ReviewItemResponse, status_code=201)

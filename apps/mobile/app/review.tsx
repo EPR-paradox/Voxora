@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useRouter } from "expo-router";
 import { useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
@@ -7,7 +8,8 @@ import { Badge, Card } from "../src/components/Card";
 import { Screen } from "../src/components/Screen";
 import { EmptyState, ErrorView, LoadingView } from "../src/components/StateViews";
 import type { ReviewItem, ReviewItemStatus } from "../src/api/types";
-import { listReviewItems, nextDueDate, updateReviewItem } from "../src/features/review/api";
+import { gradeReviewItemInput, listReviewItems, updateReviewItem } from "../src/features/review/api";
+import { formatDue } from "../src/features/review/format";
 import {
   colors,
   radius,
@@ -16,8 +18,6 @@ import {
   spacing,
   typography,
 } from "../src/theme";
-
-const MASTERY_THRESHOLD = 3;
 
 const FILTERS: Array<{ key: ReviewItemStatus | "all"; label: string }> = [
   { key: "new", label: "待复习" },
@@ -28,6 +28,7 @@ const FILTERS: Array<{ key: ReviewItemStatus | "all"; label: string }> = [
 
 export default function ReviewScreen() {
   const [status, setStatus] = useState<ReviewItemStatus | "all">("new");
+  const router = useRouter();
   const queryClient = useQueryClient();
 
   const query = useQuery({
@@ -37,17 +38,7 @@ export default function ReviewScreen() {
 
   const grade = useMutation({
     mutationFn: ({ item, remembered }: { item: ReviewItem; remembered: boolean }) =>
-      remembered
-        ? updateReviewItem(item.id, {
-            success_count: item.success_count + 1,
-            status: item.success_count + 1 >= MASTERY_THRESHOLD ? "mastered" : "reviewing",
-            due_at: nextDueDate(item.success_count + 1),
-          })
-        : updateReviewItem(item.id, {
-            failure_count: item.failure_count + 1,
-            status: "reviewing",
-            due_at: nextDueDate(0),
-          }),
+      updateReviewItem(item.id, gradeReviewItemInput(item, remembered)),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["review-items"] });
     },
@@ -83,45 +74,54 @@ export default function ReviewScreen() {
 
       <View style={styles.list}>
         {query.data?.items.map((item) => (
-          <Card key={item.id} style={styles.item}>
-            {item.original_text ? (
-              <Text style={styles.original}>{item.original_text}</Text>
-            ) : null}
-            <Text style={styles.target}>{item.target_text}</Text>
-            {item.explanation ? <Text style={styles.muted}>{item.explanation}</Text> : null}
+          <Pressable
+            key={item.id}
+            accessibilityRole="button"
+            accessibilityLabel={`${item.target_text}，打开复习项`}
+            onPress={() => router.push({ pathname: "/review/[id]", params: { id: item.id } })}
+            style={({ pressed }) => [pressed && styles.cardPressed]}
+          >
+            <Card style={styles.item}>
+              {item.original_text ? (
+                <Text style={styles.original}>{item.original_text}</Text>
+              ) : null}
+              <Text style={styles.target}>{item.target_text}</Text>
+              {item.explanation ? <Text style={styles.muted}>{item.explanation}</Text> : null}
 
-            <View style={styles.metaRow}>
-              <Badge
-                label={reviewItemTypeLabels[item.item_type] ?? item.item_type}
-                color={colors.accent}
-              />
-              <Badge
-                label={reviewStatusLabels[item.status] ?? item.status}
-                color={item.status === "mastered" ? colors.success : colors.textMuted}
-              />
-              <Text style={styles.muted}>
-                记住 {item.success_count} · 忘了 {item.failure_count}
-                {item.due_at ? ` · ${formatDue(item.due_at)}` : ""}
-              </Text>
-            </View>
+              <View style={styles.metaRow}>
+                <Badge
+                  label={reviewItemTypeLabels[item.item_type] ?? item.item_type}
+                  color={colors.accent}
+                />
+                <Badge
+                  label={reviewStatusLabels[item.status] ?? item.status}
+                  color={item.status === "mastered" ? colors.success : colors.textMuted}
+                />
+                <Text style={styles.muted}>
+                  记住 {item.success_count} · 忘了 {item.failure_count}
+                  {item.due_at ? ` · ${formatDue(item.due_at)}` : ""}
+                </Text>
+                <Text style={styles.open}>详情 ›</Text>
+              </View>
 
-            <View style={styles.actions}>
-              <AppButton
-                label="记住了"
-                variant="secondary"
-                busy={grade.isPending}
-                onPress={() => grade.mutate({ item, remembered: true })}
-                style={styles.action}
-              />
-              <AppButton
-                label="还没记住"
-                variant="secondary"
-                busy={grade.isPending}
-                onPress={() => grade.mutate({ item, remembered: false })}
-                style={styles.action}
-              />
-            </View>
-          </Card>
+              <View style={styles.actions}>
+                <AppButton
+                  label="记住了"
+                  variant="secondary"
+                  busy={grade.isPending}
+                  onPress={() => grade.mutate({ item, remembered: true })}
+                  style={styles.action}
+                />
+                <AppButton
+                  label="还没记住"
+                  variant="secondary"
+                  busy={grade.isPending}
+                  onPress={() => grade.mutate({ item, remembered: false })}
+                  style={styles.action}
+                />
+              </View>
+            </Card>
+          </Pressable>
         ))}
       </View>
 
@@ -130,15 +130,6 @@ export default function ReviewScreen() {
       ) : null}
     </Screen>
   );
-}
-
-function formatDue(iso: string): string {
-  const due = new Date(iso);
-  const now = new Date();
-  const days = Math.round((due.getTime() - now.getTime()) / 86_400_000);
-  if (days <= 0) return "今天到期";
-  if (days === 1) return "明天到期";
-  return `${days} 天后`;
 }
 
 const styles = StyleSheet.create({
@@ -156,10 +147,12 @@ const styles = StyleSheet.create({
   chipLabelActive: { color: colors.text },
   list: { gap: spacing.md, marginTop: spacing.lg },
   item: { gap: spacing.xs },
-  original: { ...typography.caption, color: colors.textMuted, textDecorationLine: "line-through" },
+  cardPressed: { opacity: 0.75 },
+  original: { fontSize: 13, lineHeight: 19, color: colors.textMuted, textDecorationLine: "line-through" },
   target: { ...typography.body, color: colors.text, fontWeight: "600", lineHeight: 22 },
   muted: { ...typography.caption, color: colors.textMuted, lineHeight: 18 },
   metaRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: spacing.sm, marginTop: spacing.xs },
+  open: { ...typography.label, color: colors.accent, marginLeft: "auto" },
   actions: { flexDirection: "row", gap: spacing.sm, marginTop: spacing.sm },
   action: { flex: 1, minHeight: 38 },
   total: { marginTop: spacing.lg, ...typography.caption, color: colors.textMuted },

@@ -39,6 +39,7 @@ export default function RootLayout() {
           <Stack.Screen name="practice/[sessionId]" options={{ title: "练习中" }} />
           <Stack.Screen name="evaluation/[sessionId]" options={{ title: "反馈" }} />
           <Stack.Screen name="review" options={{ title: "复习" }} />
+          <Stack.Screen name="review/[id]" options={{ title: "复习项" }} />
           <Stack.Screen name="settings" options={{ title: "设置" }} />
         </Stack>
       </SafeAreaProvider>

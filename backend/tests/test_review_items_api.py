@@ -185,6 +185,72 @@ async def test_patch_ignores_ownership_fields(api: ApiHarness) -> None:
         assert stored.source_session_id == source_before
 
 
+async def test_read_one_item_returns_the_same_shape_as_the_list(api: ApiHarness) -> None:
+    """The detail page fetches one id, so the single-item response must not be a narrower DTO."""
+    session_id = await start_practice(api)
+    created = (await _create(api, session_id)).json()
+
+    response = await api.client.get(f"/api/v1/review-items/{created['id']}")
+
+    assert response.status_code == 200
+    assert response.json() == created
+
+
+async def test_read_one_item_reflects_a_patch(api: ApiHarness) -> None:
+    session_id = await start_practice(api)
+    item = (await _create(api, session_id)).json()
+    await api.client.patch(
+        f"/api/v1/review-items/{item['id']}", json={"status": "reviewing", "success_count": 1}
+    )
+
+    response = await api.client.get(f"/api/v1/review-items/{item['id']}")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "reviewing"
+    assert response.json()["success_count"] == 1
+
+
+async def test_read_unknown_item_is_404(api: ApiHarness) -> None:
+    response = await api.client.get(f"/api/v1/review-items/{uuid4()}")
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "resource_not_found"
+
+
+async def test_read_another_users_item_is_404_not_403(api: ApiHarness) -> None:
+    """Existence is not leaked: someone else's item is indistinguishable from a missing one."""
+    async with api.session_factory() as session:
+        other_user = User(id=uuid4(), status="active")
+        session.add(other_user)
+        await session.flush()
+        foreign = ReviewItem(
+            id=uuid4(),
+            user_id=other_user.id,
+            source_session_id=None,
+            item_type="expression",
+            original_text="mine",
+            target_text="not yours",
+            explanation=None,
+            status="new",
+            success_count=0,
+            failure_count=0,
+        )
+        session.add(foreign)
+        await session.commit()
+        foreign_id = str(foreign.id)
+
+    response = await api.client.get(f"/api/v1/review-items/{foreign_id}")
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "resource_not_found"
+
+
+async def test_read_rejects_a_non_uuid_id(api: ApiHarness) -> None:
+    response = await api.client.get("/api/v1/review-items/not-a-uuid")
+
+    assert response.status_code == 422
+
+
 async def test_patch_unknown_item_is_404(api: ApiHarness) -> None:
     response = await api.client.patch(
         f"/api/v1/review-items/{uuid4()}", json={"status": "mastered"}
