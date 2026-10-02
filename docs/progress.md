@@ -824,6 +824,21 @@ API TTFB              0.15s     （模型已载）/ 0.86–1.02s（首次，含�
   `--resolve <host>:443:<真实 CF IP>` 绕过即得 200。手机没有 Mihomo、解析正常，所以**本机连不上的结论
   对手机无效**。
 
+### 常驻（重启不会废）
+
+`infra/run-api.sh` 只是启动脚本；「开机自启」是另一件事，而且它其实是三个问题：
+
+1. **Postgres 容器不会自启**：`docker-compose.yml` 里没有 restart 策略。已加 `restart: unless-stopped`，
+   并对正在运行的容器用 `docker update --restart unless-stopped` 让策略立即生效（不必重建容器）。
+2. **API 交给 systemd user service**：`~/.config/systemd/user/voxora-api.service`（模板留在
+   `infra/voxora-api.service`）。这台机器的 `Linger=yes` 早就开着（Hermes gateway 装的），所以
+   `systemctl --user enable --now` 真能在登录之前就起来 —— 反正这台机器也没有免密 sudo。
+   **验证不能只看 `is-active`**：`kill -9` 掉进程后必须换一个新 pid、`NRestarts` 加一，才算
+   `Restart=always` 真的生效（实测 pid 205931 → 206129，NRestarts 1，之后三个真 provider 全部照常）。
+3. **cloudflared 现在不能做成自启服务**，而且原因不是技术问题：quick tunnel 每次启动都换域名，做成服务
+   只会让它「看起来能自启」，而 APK 里编译进去的还是旧地址，照样连不上。
+   **第 3 条必须等固定域名之后再做。**
+
 ### 验证
 
 ```

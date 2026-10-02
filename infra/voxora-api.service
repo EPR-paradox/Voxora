@@ -1,0 +1,23 @@
+[Unit]
+Description=Voxora API - English practice backend (FastAPI)
+Documentation=file:///home/j/myprojects/Voxora/docs/software-design-v0.1.md
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# The launcher injects the real providers (DeepSeek key read from ~/.hermes/.env, faster-whisper for
+# transcription, Piper for synthesis) as environment variables. See the script for why nothing is
+# written into backend/.env.
+ExecStart=/home/j/myprojects/Voxora/infra/run-api.sh
+WorkingDirectory=/home/j/myprojects/Voxora/backend
+Restart=always
+RestartSec=5
+# A restart has to reload three Whisper/Piper models; that is on demand, not at startup, so a brisk
+# stop timeout is safe.
+TimeoutStopSec=20
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

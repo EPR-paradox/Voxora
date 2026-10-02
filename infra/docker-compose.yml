@@ -1,6 +1,9 @@
 services:
   postgres:
     image: postgres:16-alpine
+    # Come back after a reboot. The API is useless without its database, and a container that only
+    # starts when someone remembers to run `docker compose up` is not a service.
+    restart: unless-stopped
     environment:
       POSTGRES_DB: voxora
       POSTGRES_USER: voxora
