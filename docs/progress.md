@@ -152,3 +152,103 @@
 4. 把真 provider 冒烟脚本固化进仓库（读环境变量即可跑），让“真 key 能通”成为一条可重复的命令，
    而不是一次性手工验证。
 5. 语音（Phase 5）继续往后排：它只是输入方式，闭环价值已经在文本路径上兑现。
+
+## 2026-10-02（夜）真机联调修正
+
+### 1. 手机跑通闭环后暴露的三个问题
+
+- **「AI 一直重复问同一个问题」= 跑的是 mock provider，不是模型或 prompt 的问题。** `backend/.env` 里
+  `AI_PROVIDER=mock` 是设计默认（测试与离线开发用、不烧钱），正在服务的 uvicorn 继承了它，于是每轮都返回
+  `FakeRoleplayProvider` 的同一句硬编码。证据：该会话三条 assistant 回复逐字相同，且等于
+  `app/ai/roleplay.py` 里的字面量。修法不动 `.env`：启动脚本从 `~/.hermes/.env` 读 key，把
+  `AI_PROVIDER=openai_compatible` / `AI_MODEL=deepseek-flash` / `AI_BASE_URL` / `AI_API_KEY` 作为进程
+  环境注入，key 不落仓库、不回显。修后实测开场白与两轮追问均为真实模型输出且各不相同。
+- **偶发 502（已修）**：切换 provider 后头两次请求返回 `ai_provider_error`，其后连续成功。原因是 roleplay
+  provider 没有重试，而上游的空输出/5xx 是掷硬币式的偶发失败。现在按 §13.2 补上「可重试失败各重试一次」：
+  判定落在共享传输层的 `ModelEndpointError.retryable`（空输出、5xx、429/408/409/425、传输错误可重试；
+  401/403/422、`finish_reason=length`、超时不可重试），roleplay 与 evaluation 共用同一套判定 —— 顺带修掉了
+  evaluation 连 401 也要重试一次的白花。测试 132 → 138（新增 6 条：空输出重试成功、5xx 重试成功、两次
+  失败仍上报、401 不重试、截断不重试、超时不重试）。
+- **复习项点不进去**：不是渲染 bug。§10.1 原来只有 Review List 一页，没有详情页；卡片把用户原话与推荐表达
+  并排铺开，也就没有回忆环节。按用户选择做「详情页」方案（A 方案「列表卡片翻面」未做）。
+
+### 2. 本次交付
+
+- 新增 `GET /api/v1/review-items/{id}`（§7.10）：与列表项同一个 DTO；不存在或非本人统一 404
+  `resource_not_found`，不区分「没有」与「别人的」。服务层 `get_review_item` 本来就有，缺的是一条路由。
+- 新增 Review Detail 页（§10.1 第 7 条，原 Profile 顺延为第 8 条）
+  `apps/mobile/app/review/[id].tsx`：原话、推荐表达、解释、复习记录（记住/忘了、下次复习、加入时间）、
+  来源练习反馈入口（`source_session_id` → `/evaluation/[sessionId]`）、就地「记住了 / 还没记住」。
+  按 id 直读而不从列表缓存里找，深链与冷启动可渲染。
+- 列表卡片改为可点入详情，并加「详情 ›」提示；卡片被按下时给透明度反馈。
+- 间隔阶梯（`gradeReviewItemInput` / `nextDueDate` / `MASTERY_THRESHOLD`）与日期格式化
+  （`formatDue` / `formatDateTime`）上移到 `src/features/review/{api,format}.ts`：列表与详情共用一个
+  真相源，两份实现必然漂移。
+- 测试 127 → 132：新增单条读取 5 条（结构与列表一致、patch 后可见、未知 id 404、他人条目 404 而非 403、
+  非法 uuid 422），并把新路由加进 `test_access_coverage.py` 的「非 loopback 必须 401」清单。
+- 质量门禁：`ruff check` / `ruff format --check` 通过；`pytest -q` 132 passed；`tsc --noEmit` 干净。
+- 设计文档升到 Draft v0.7（§7.10 增单条读取、§10.1 增 Review Detail 页）。
+
+### 3. 运行方式（今天改过的地方）
+
+- 后端与 Metro 都用 `persist_on_release` 的后台进程启动：父进程是 agent 会话，会话结束不再被回收。
+  今天早些时候真机卡在 Expo Go 的 99%，就是 dev server 被回收（手机侧连接停在 FIN-WAIT-2），
+  bundle 传到一半服务端没了。
+- 真 provider 启动脚本：读 `~/.hermes/.env` 的 `DEEPSEEK_API_KEY` → export `AI_*` → `exec uvicorn`
+  （`0.0.0.0:8000`）。
+- 本地仍领先远端 9 个提交（代理未开：`127.0.0.1:7890` 无监听，直连 github.com 超时）。
+
+### 4. 未验证 / 待办
+
+- 「点卡片 → 跳详情」已在真机确认（手机 IP 发起了 `GET /api/v1/review-items/<id>` → 200）。
+- 复习页的回忆环节仍未解决：详情页给了内容展开的地方，但列表卡片依旧把原话与答案并排显示（用户选择不做 A 方案）。
+- 真 provider 冒烟脚本还没进仓库（仍在 scratch 目录，闲置 24 小时会被清）。
+- 语音（Phase 5）未开工，契约见 §7.11 / §8.6 / §10.4。
+- 本地领先远端仍是 9 个提交（代理未开）。
+
+## 2026-10-02（夜）会议模式设计草案
+
+产品决策：语音不做「按住/开麦 + 回填输入框」的单角色延伸，而是要做**多人会议情景模拟**。经拆解，这是
+Phase 6 级别的产品变更（不是给 Phase 5 加个接口），范围定为「AI 扮演多个与会者的文本会议，语音输出单独立项」。
+
+- 草案独立成文：`docs/meeting-mode-v0.1.md`（Draft v0.1），主规格 §17 增加 Phase 6 指针。
+- 草案里最硬的两处是数据模型与状态机：`scenarios.ai_character`（单角色 JSONB）要扩成 `cast` 数组；
+  `messages.role IN ('user','assistant')` + `UNIQUE(session_id, turn_index, role)` 决定了「每轮只能有一条 AI
+  回复」，多角色必须加 `speaker_key` 与 `seq`（`now()` 在同一事务里是常量，只有 `created_at` 排序会不稳定），
+  并把唯一约束扩到四列；`speaker_key` 用空串而非 NULL 表示学习者，否则 PostgreSQL 的唯一约束对用户消息失效。
+- 编排取向：一次调用产出 1–3 条发言（json mode + 严格校验：未知发言人一律拒绝），而不是每个角色各调一次
+  （N 倍延迟、角色之间无法真正接话）。
+- 契约取向：`POST /messages` 的响应从单条 `assistant_message` 改为 `assistant_messages: [...]`，一次性切换、
+  不留兼容分支；§7.6 / §7.7 / §7.4 / §9.3 / §10.1 按草案的对照表成套修订。
+- 待用户拍板 5 项（草案 §10）：每轮发言条数上限、会议中是否改为「说完自动发出」、会议人数、是否新增会议
+  专属评价维度、角色用虚构人名还是职位称谓。
+
+## 2026-10-02（夜）会议模式 6.1 完成：数据模型
+
+用户拍板（草案 §10 已改为「已定决策」）：每轮 AI 发言上限 3、会议人数 2–3、会议中语音转写后**自动发送**、
+本期不加会议专属评价维度、角色用虚构人名。其中「自动发送」是对主规格 §10.4 决策的**例外**，已在 §0.1
+决策表新增一行并在 §10.4 写清（只对 Meeting 页生效，Practice 页仍回填确认）。规格升 Draft v0.9。
+
+6.1 交付（迁移 `3c9f1a7d24b8`）：
+
+- `scenarios.cast` JSONB nullable：与会者数组。为 null 表示单角色场景，`ai_character` 继续生效；
+  形状校验放在应用层（`normalize_cast`）而不是 CHECK 约束 —— `jsonb_typeof` 在测试用的 SQLite 里不存在。
+- `messages.speaker_key` VARCHAR(32) NOT NULL DEFAULT ''：空串 = 学习者。**不用 NULL**：PostgreSQL 的唯一
+  约束里 NULL 互不相等，可空的话 `UNIQUE(session_id, turn_index, role, speaker_key)` 对用户消息完全不设防。
+- `messages.seq` INTEGER NOT NULL + `ck_messages_seq`：会话内展示顺序。**`created_at` 干不了这件事** ——
+  `now()` 在同一事务里是常量，一轮写入的多条消息时间戳完全相同，只按时间排序会让客户端消息顺序漂移。
+- 唯一约束 `UNIQUE(session_id, turn_index, role)` → `UNIQUE(..., speaker_key)`；服务层新增
+  `_next_message_seq()`，创建开场白、写入用户消息、写入 AI 回复三处都补了序列号；`GET /sessions/{id}`
+  与评价 transcript 的排序改用 `seq`。
+- 新增 `app/scenario_cast.py`：`scenario_cast()`（cast 优先，否则把旧 `ai_character` 包成单元素）、
+  `is_meeting()`、`speaker_index()`、`normalize_cast()`。**所有读侧必须过它**，禁止直接读 `ai_character`
+  造 prompt，否则新旧场景行为分叉。历史 `scenario_snapshot` 未做任何迁移或改写。
+- 验证：`alembic upgrade head` 在生产库（21 会话 / 105 消息）跑通，105 行全部回填 seq（min=1，无重复）；
+  `downgrade -1` → 列与约束复原、105 行无损 → 再 `upgrade head` 成功（可逆往返）；`GET /review-items` 等
+  既有接口不受影响；真 provider 新建会话 + 一轮对话 201，库里顺序为 `turn 0 opening(seq 1) → user(seq 2)
+  → assistant(seq 3)`。
+- 质量门禁：`ruff check` / `ruff format --check` 全过；`pytest -q` 138 → **169 passed**（新增
+  `test_scenario_cast.py` 19 条、`test_message_speakers.py` 5 条 —— 后者专门盯「同一轮两个 AI 可以各说一句」
+  与「同一轮只能有一条学习者消息」这两条互为反向的约束）。
+
+下一步 6.2：Provider 多角色剧本生成 + 输出校验 + 契约升级到 `assistant_messages: [...]`。
