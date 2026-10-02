@@ -5,7 +5,7 @@ import pytest
 from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.ai.roleplay import RoleplayProvider
+from app.ai.roleplay import RoleplayProvider, RoleplayTurn
 from app.core.config import settings
 from app.db.base import Base
 from app.db.models import Message, PracticeSession, Scenario, User
@@ -18,10 +18,12 @@ class FailOnceProvider:
         self.session_factory = session_factory
         self.session_id = session_id
 
-    async def opening_message(self, scenario: dict) -> str:
-        return "Tell me about your project."
+    async def opening_turns(self, scenario: dict) -> list[RoleplayTurn]:
+        return [RoleplayTurn(speaker_key="interviewer", content="Tell me about your project.")]
 
-    async def reply(self, scenario: dict, history: list[dict], user_message: str) -> str:
+    async def reply(
+        self, scenario: dict, history: list[dict], user_message: str
+    ) -> list[RoleplayTurn]:
         async with self.session_factory() as session:
             practice_session = await session.get(PracticeSession, self.session_id)
             pending_message = await session.scalar(
@@ -37,7 +39,7 @@ class FailOnceProvider:
         self.calls += 1
         if self.calls == 1:
             raise TimeoutError
-        return "What was the main challenge?"
+        return [RoleplayTurn(speaker_key="interviewer", content="What was the main challenge?")]
 
 
 @pytest.mark.asyncio
@@ -134,7 +136,7 @@ async def test_failed_turn_releases_lock_and_next_message_uses_next_index(tmp_pa
         assert failed_message.status == "failed"
 
     async with session_factory() as session:
-        user_message, assistant_message, replayed = await send_practice_message(
+        practice_session, user_message, assistant_messages, replayed = await send_practice_message(
             session,
             session_id=session_id,
             client_message_id=uuid4(),
@@ -143,6 +145,7 @@ async def test_failed_turn_releases_lock_and_next_message_uses_next_index(tmp_pa
         )
         assert replayed is False
         assert user_message.turn_index == 2
-        assert assistant_message.turn_index == 2
+        assert [message.turn_index for message in assistant_messages] == [2]
+        assert [message.speaker_key for message in assistant_messages] == ["interviewer"]
 
     await engine.dispose()

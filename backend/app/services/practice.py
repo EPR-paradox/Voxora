@@ -22,7 +22,7 @@ async def create_practice_session(
     *,
     scenario_id: UUID,
     provider: RoleplayProvider,
-) -> tuple[PracticeSession, UUID, str, Message]:
+) -> tuple[PracticeSession, UUID, str, list[Message]]:
     scenario = await session.scalar(
         select(Scenario).where(
             Scenario.id == scenario_id,
@@ -57,7 +57,7 @@ async def create_practice_session(
     await session.rollback()
 
     try:
-        opening_line = await provider.opening_message(snapshot)
+        opening_turns = await provider.opening_turns(snapshot)
     except TimeoutError as exc:
         raise PracticeError(504, "ai_provider_timeout", "The roleplay provider timed out.") from exc
     except Exception as exc:
@@ -76,21 +76,28 @@ async def create_practice_session(
         last_activity_at=now,
         started_at=now,
     )
-    opening_message = Message(
-        id=uuid4(),
-        session_id=practice_session.id,
-        turn_index=0,
-        seq=1,
-        role="assistant",
-        content=opening_line,
-        status="completed",
-    )
     session.add(practice_session)
     await session.flush()
-    session.add(opening_message)
+
+    # The opening is one or more turns (a meeting opens with a short exchange), written in a single
+    # transaction: a session that exists with half an opening would leave the learner guessing.
+    opening_messages = [
+        Message(
+            id=uuid4(),
+            session_id=practice_session.id,
+            turn_index=0,
+            seq=position,
+            role="assistant",
+            speaker_key=turn.speaker_key,
+            content=turn.content,
+            status="completed",
+        )
+        for position, turn in enumerate(opening_turns, start=1)
+    ]
+    session.add_all(opening_messages)
     await session.flush()
     await session.commit()
-    return practice_session, scenario_id_value, snapshot["title"], opening_message
+    return practice_session, scenario_id_value, snapshot["title"], opening_messages
 
 
 async def list_practice_sessions(
@@ -151,7 +158,7 @@ async def send_practice_message(
     client_message_id: UUID,
     content: str,
     provider: RoleplayProvider,
-) -> tuple[Message, Message, bool]:
+) -> tuple[PracticeSession, Message, list[Message], bool]:
     async with session.begin():
         practice_session = await session.scalar(
             select(PracticeSession)
@@ -183,15 +190,9 @@ async def send_practice_message(
             raise PracticeError(409, "turn_in_progress", "Another message is being processed.")
 
         if existing_message is not None and existing_message.status == "completed":
-            assistant_message = await session.scalar(
-                select(Message).where(
-                    Message.session_id == practice_session.id,
-                    Message.turn_index == existing_message.turn_index,
-                    Message.role == "assistant",
-                )
-            )
-            if assistant_message is not None:
-                return existing_message, assistant_message, True
+            assistant_messages = await _assistant_turns(session, existing_message)
+            if assistant_messages:
+                return practice_session, existing_message, assistant_messages, True
             raise RuntimeError("Completed user message is missing its assistant response.")
 
         if existing_message is None:
@@ -225,17 +226,26 @@ async def send_practice_message(
         )
         .order_by(Message.turn_index, Message.seq)
     )
-    history = [{"role": message.role, "content": message.content} for message in history_rows]
+    history = [
+        {"role": message.role, "speaker_key": message.speaker_key, "content": message.content}
+        for message in history_rows
+    ]
     await session.rollback()
 
     try:
-        assistant_content = await provider.reply(scenario_snapshot, history, content)
+        reply_turns = await provider.reply(scenario_snapshot, history, content)
     except TimeoutError as exc:
         await _mark_message_failed(session, session_id, user_message_id)
         raise PracticeError(504, "ai_provider_timeout", "The roleplay provider timed out.") from exc
     except Exception as exc:
         await _mark_message_failed(session, session_id, user_message_id)
         raise PracticeError(502, "ai_provider_error", "The roleplay provider failed.") from exc
+
+    # A provider that answers with nothing violates its own contract; treat it as a provider failure
+    # rather than writing a turn with no reply into the transcript.
+    if not reply_turns:
+        await _mark_message_failed(session, session_id, user_message_id)
+        raise PracticeError(502, "ai_provider_error", "The roleplay provider returned no turns.")
 
     async with session.begin():
         practice_session = await session.scalar(
@@ -246,22 +256,49 @@ async def send_practice_message(
             raise RuntimeError("Practice session state disappeared while generating a reply.")
 
         user_message.status = "completed"
-        assistant_message = Message(
-            id=uuid4(),
-            session_id=session_id,
-            turn_index=turn_index,
-            seq=await _next_message_seq(session, session_id),
-            role="assistant",
-            content=assistant_content,
-            status="completed",
-        )
-        session.add(assistant_message)
+        # The whole reply lands in one transaction with contiguous sequence numbers: a meeting where
+        # only the first participant made it into the database is worse than a failed turn, because
+        # nothing downstream can tell that two voices were lost (§9.3, meeting-mode §6).
+        base_seq = await _next_message_seq(session, session_id)
+        assistant_messages = [
+            Message(
+                id=uuid4(),
+                session_id=session_id,
+                turn_index=turn_index,
+                seq=base_seq + offset,
+                role="assistant",
+                speaker_key=turn.speaker_key,
+                content=turn.content,
+                status="completed",
+            )
+            for offset, turn in enumerate(reply_turns)
+        ]
+        session.add_all(assistant_messages)
         practice_session.turn_count = max(practice_session.turn_count, turn_index)
         practice_session.processing_turn_id = None
         practice_session.last_activity_at = datetime.now(timezone.utc)
         await session.flush()
 
-    return user_message, assistant_message, False
+    return practice_session, user_message, assistant_messages, False
+
+
+async def _assistant_turns(session: AsyncSession, user_message: Message) -> list[Message]:
+    """Every AI turn of one learner turn, in display order.
+
+    A meeting can carry several (docs/meeting-mode-v0.1.md §6). Idempotent replay has to hand back
+    the same set in the same order the learner already saw, or a network retry would look like the
+    conversation being rewritten.
+    """
+    rows = await session.scalars(
+        select(Message)
+        .where(
+            Message.session_id == user_message.session_id,
+            Message.turn_index == user_message.turn_index,
+            Message.role == "assistant",
+        )
+        .order_by(Message.seq)
+    )
+    return list(rows)
 
 
 async def _next_message_seq(session: AsyncSession, session_id: UUID) -> int:

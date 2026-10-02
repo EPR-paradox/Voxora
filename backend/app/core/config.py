@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     ai_timeout_seconds: float = 30.0
     ai_max_tokens: int = 400
     ai_json_mode: bool = True
+    # A meeting answers with a short script of 1-3 voices in one call, which costs more completion
+    # tokens than a single spoken turn; deepseek-flash also spends roughly half of them on reasoning
+    # that never reaches the output. Initial value, to be pinned by measurement in Phase 6
+    # (docs/meeting-mode-v0.1.md §5).
+    ai_meeting_max_tokens: int = 1200
 
     # Evaluation is a separate provider with its own limits (design §8.6): it returns a structured
     # document rather than one spoken turn, so it needs a longer budget and its own timeout.

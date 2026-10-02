@@ -16,7 +16,7 @@ from app.api.deps import (
     require_practice_access,
 )
 from app.api.errors import error_response
-from app.db.models import Evaluation, PracticeSession
+from app.db.models import Evaluation, Message, PracticeSession
 from app.evaluation_schemas import (
     EvaluationPayload,
     EvaluationStatusResponse,
@@ -31,10 +31,12 @@ from app.practice_schemas import (
     PracticeSessionDetail,
     PracticeSessionListResponse,
     PracticeSessionSummary,
+    ScenarioParticipant,
     ScenarioReference,
     SendPracticeMessageRequest,
     SendPracticeMessageResponse,
 )
+from app.scenario_cast import speaker_index
 from app.services.evaluation import finish_practice_session, get_evaluation, retry_evaluation
 from app.services.practice import (
     PracticeError,
@@ -95,7 +97,7 @@ async def create_session(
             practice_session,
             scenario_id,
             scenario_title,
-            opening_message,
+            opening_messages,
         ) = await create_practice_session(
             session,
             scenario_id=body.scenario_id,
@@ -109,19 +111,25 @@ async def create_session(
             message=exc.message,
         )
 
+    participants = _participants(practice_session.scenario_snapshot)
     return PracticeSessionCreated(
         id=practice_session.id,
         scenario=ScenarioReference(id=scenario_id, title=scenario_title),
         status="active",
         input_mode="text",
+        participants=participants,
         messages=[
             OpeningMessage(
-                id=opening_message.id,
-                turn_index=0,
+                id=opening.id,
+                turn_index=opening.turn_index,
+                seq=opening.seq,
                 role="assistant",
-                content=opening_message.content,
+                speaker_key=opening.speaker_key,
+                speaker=_speaker(participants, opening.speaker_key),
+                content=opening.content,
                 status="completed",
             )
+            for opening in opening_messages
         ],
         started_at=practice_session.started_at,
     )
@@ -144,6 +152,7 @@ async def read_session(
         )
 
     snapshot = practice_session.scenario_snapshot
+    participants = _participants(snapshot)
     return PracticeSessionDetail(
         id=practice_session.id,
         scenario=ScenarioReference(
@@ -154,7 +163,8 @@ async def read_session(
         input_mode=practice_session.input_mode,
         scenario_version=practice_session.scenario_version,
         turn_count=practice_session.turn_count,
-        messages=[PracticeMessageDetail.model_validate(message) for message in messages],
+        participants=participants,
+        messages=[_message_detail(message, participants) for message in messages],
         started_at=practice_session.started_at,
         completed_at=practice_session.completed_at,
     )
@@ -174,7 +184,7 @@ async def post_message(
     provider: Annotated[RoleplayProvider, Depends(get_roleplay_provider)],
 ) -> SendPracticeMessageResponse | JSONResponse:
     try:
-        user_message, assistant_message, replayed = await send_practice_message(
+        practice_session, user_message, assistant_messages, replayed = await send_practice_message(
             session,
             session_id=session_id,
             client_message_id=body.client_message_id,
@@ -191,9 +201,12 @@ async def post_message(
 
     if replayed:
         response.status_code = 200
+    participants = _participants(practice_session.scenario_snapshot)
     return SendPracticeMessageResponse(
-        user_message=PracticeMessageResponse.model_validate(user_message),
-        assistant_message=PracticeMessageResponse.model_validate(assistant_message),
+        user_message=_message_response(user_message, participants),
+        assistant_messages=[
+            _message_response(message, participants) for message in assistant_messages
+        ],
         session_status="active",
     )
 
@@ -269,6 +282,50 @@ async def retry_session_evaluation(
             message=exc.message,
         )
     return _evaluation_response(practice_session, evaluation)
+
+
+def _participants(snapshot: dict) -> list[ScenarioParticipant]:
+    """The people in this session's room, from its own snapshot (docs/meeting-mode-v0.1.md §4)."""
+    index = speaker_index(snapshot)
+    return [
+        ScenarioParticipant(key=key, name=item["name"], title=item["title"])
+        for key, item in index.items()
+    ]
+
+
+def _speaker(participants: list[ScenarioParticipant], key: str) -> ScenarioParticipant | None:
+    if not key:
+        return None
+    for participant in participants:
+        if participant.key == key:
+            return participant
+    # A key the snapshot does not know: the scenario was edited after this session started, or a
+    # provider bug invented it. Showing the raw key is ugly but truthful; falling back to the
+    # learner would silently attribute someone else's words to them.
+    return ScenarioParticipant(key=key, name=key, title="")
+
+
+def _message_response(
+    message: Message, participants: list[ScenarioParticipant]
+) -> PracticeMessageResponse:
+    return PracticeMessageResponse(
+        id=message.id,
+        client_message_id=message.client_message_id,
+        turn_index=message.turn_index,
+        seq=message.seq,
+        role=message.role,
+        speaker_key=message.speaker_key,
+        speaker=_speaker(participants, message.speaker_key),
+        content=message.content,
+        created_at=message.created_at,
+    )
+
+
+def _message_detail(
+    message: Message, participants: list[ScenarioParticipant]
+) -> PracticeMessageDetail:
+    payload = _message_response(message, participants)
+    return PracticeMessageDetail(**payload.model_dump(), status=message.status)
 
 
 def _evaluation_response(

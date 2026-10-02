@@ -61,6 +61,7 @@ def provider_with_handler(handler, **overrides) -> OpenAICompatibleRoleplayProvi
         timeout_seconds=settings.ai_timeout_seconds,
         max_tokens=settings.ai_max_tokens,
         max_context_messages=settings.max_context_messages,
+        meeting_max_tokens=settings.ai_meeting_max_tokens,
         retry_delay_seconds=0,
         transport=httpx.MockTransport(handler),
     )
@@ -114,7 +115,7 @@ def test_system_prompt_falls_back_when_scenario_is_sparse() -> None:
 
 
 @pytest.mark.asyncio
-async def test_opening_message_sends_system_prompt_and_opening_instruction() -> None:
+async def test_opening_turn_sends_system_prompt_and_opening_instruction() -> None:
     captured: list[dict] = []
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -123,11 +124,13 @@ async def test_opening_message_sends_system_prompt_and_opening_instruction() -> 
 
     provider = provider_with_handler(handler)
     try:
-        content = await provider.opening_message(SCENARIO)
+        turns = await provider.opening_turns(SCENARIO)
     finally:
         await provider.aclose()
 
-    assert content == "So, tell me about the project."
+    assert [turn.content for turn in turns] == ["So, tell me about the project."]
+    # A single-character scenario still answers with one turn, keyed to its only participant.
+    assert [turn.speaker_key for turn in turns] == ["interviewer"]
     assert captured[0]["url"] == "https://model.test/v1/chat/completions"
     payload = captured[0]["payload"]
     assert payload["model"] == "deepseek-chat"
@@ -202,7 +205,7 @@ async def test_error_status_maps_to_provider_error(status_code: int) -> None:
     provider = provider_with_handler(handler)
     try:
         with pytest.raises(RoleplayProviderError, match=str(status_code)):
-            await provider.opening_message(SCENARIO)
+            await provider.opening_turns(SCENARIO)
     finally:
         await provider.aclose()
 
@@ -225,7 +228,7 @@ async def test_unusable_body_maps_to_provider_error(response: httpx.Response) ->
     provider = provider_with_handler(handler)
     try:
         with pytest.raises(RoleplayProviderError):
-            await provider.opening_message(SCENARIO)
+            await provider.opening_turns(SCENARIO)
     finally:
         await provider.aclose()
 
@@ -254,11 +257,11 @@ async def test_empty_answer_is_retried_once() -> None:
 
     provider = provider_with_handler(handler)
     try:
-        content = await provider.reply(SCENARIO, [], "I ran the pipeline.")
+        turns = await provider.reply(SCENARIO, [], "I ran the pipeline.")
     finally:
         await provider.aclose()
 
-    assert content == "What was the main challenge?"
+    assert [turn.content for turn in turns] == ["What was the main challenge?"]
     assert len(calls) == 2
 
 
@@ -275,11 +278,11 @@ async def test_upstream_5xx_is_retried_once() -> None:
 
     provider = provider_with_handler(handler)
     try:
-        content = await provider.reply(SCENARIO, [], "I ran the pipeline.")
+        turns = await provider.reply(SCENARIO, [], "I ran the pipeline.")
     finally:
         await provider.aclose()
 
-    assert content.startswith("Got it.")
+    assert turns[0].content.startswith("Got it.")
     assert len(calls) == 2
 
 

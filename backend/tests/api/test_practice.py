@@ -91,7 +91,10 @@ async def test_create_session_saves_snapshot_and_opening_message(
         {
             "id": payload["messages"][0]["id"],
             "turn_index": 0,
+            "seq": 1,
             "role": "assistant",
+            "speaker_key": "interviewer",
+            "speaker": {"key": "interviewer", "name": "Interviewer", "title": "Manager"},
             "content": "Could you briefly introduce the project and your role in it?",
             "status": "completed",
         }
@@ -125,9 +128,16 @@ async def test_message_retry_is_idempotent_and_trims_content(
     assert retry.status_code == 200
     assert retry.json() == first.json()
     assert first.json()["user_message"]["content"] == "I built a measurement pipeline."
-    assert first.json()["assistant_message"]["turn_index"] == 1
+    # One reply from the single participant, always in a list (§7.6).
+    assert [message["turn_index"] for message in first.json()["assistant_messages"]] == [1]
+    assert [message["speaker_key"] for message in first.json()["assistant_messages"]] == [
+        "interviewer"
+    ]
     assert first.json()["session_status"] == "active"
     assert len(history.json()["messages"]) == 3
+    assert history.json()["participants"] == [
+        {"key": "interviewer", "name": "Interviewer", "title": "Manager"}
+    ]
 
 
 @pytest.mark.asyncio
