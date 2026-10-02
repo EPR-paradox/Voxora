@@ -474,3 +474,61 @@ fixed  {bytes,name,type}      → body 104948 B → HTTP 200，转写文字正�
 顺带一条教训：手机是黑盒，但 **Metro 日志就是它的 console** —— `console.warn` 出来的东西能直接读到；
 遇到「手机上说网络不通、服务器却一条请求都没收到」时，先怀疑请求体，再怀疑网络。
 
+---
+
+## 2026-10-02 当日总览（收尾）
+
+一天把 Phase 0→6 走完（除离线 TTS 与实时音频）。**当日 31 个 commit，全部已推 `origin/main`**。
+
+### 交付
+
+| 阶段 | 内容 | 状态 |
+|---|---|---|
+| Phase 0–1 | 仓库/环境、Schema、场景种子、迁移基线 | 完成 |
+| Phase 2 | 文本 Roleplay（真 DeepSeek，非 mock） | 完成 |
+| Phase 3 | Evaluation + 复习项（评测证据必须可归属到原话） | 完成 |
+| Phase 4 | Android 客户端（Expo Go 真机可用） | 完成 |
+| Phase 5 | 语音输入（§7.11 转写）+ 语音输出（§7.13 合成） | 完成（GPU 路径经评估放弃，见下） |
+| Phase 6 | 会议模式 6.1–6.6（cast / speaker_key / seq、多角色编排、音色、真机播放） | 完成 |
+
+### 数字
+
+- 后端测试 **45 → 234**（今日净增 189）；`ruff check` / `ruff format --check` 全过；移动端 `tsc --noEmit` 干净。
+- 迁移今日新增 2 个：`5d07a878bd32`（evaluations / review_items）、`3c9f1a7d24b8`（会议 cast / speaker_key / seq），均可逆往返。
+- 规格 `docs/software-design-v0.1.md` **v0.3 → v0.12**；新增 `docs/meeting-mode-v0.1.md`（会议模式草案）。
+- 延迟实测（deepseek-flash + 本机）：开场 1.3 s；单轮 roleplay 1.1–2.2 s；会议一轮 1–3 条 1.4–6.1 s；完整评价 13–15 s。
+
+### 语音链路的实测数字（都是本机跑出来的，不是估的）
+
+```
+转写 small.en / CPU int8（i5-10300H 8 线程）
+  17.4 秒音频 → 1.7 秒（10.0x 实时）
+  313 秒音频 → 26.9 秒（11.6x 实时），文字与原文逐字一致
+  → SPEECH_TIMEOUT_SECONDS=180 对 300 秒上限有 ~6.7 倍余量
+
+合成 edge-tts（不需要代理、无密钥）
+  单句 1.7–2.8 秒；三个音色各合成 → 再喂回 §7.11 转写 → 三个都逐字还原原文（闭环）
+```
+
+### 今天定下的决策（每条背后都有证据或实测）
+
+1. **语音是输入法**，不是消息类型；音频在输入与输出两端都不落库、不缓存（输出侧带 `Cache-Control: no-store`）。
+2. **开麦即停播** —— 不是优化：扬声器还在响时开麦，学习者会把 AI 的声音录进自己这一轮。
+3. **音色按 cast key 哈希分配**，不按位置：按位置的话，加一个与会者会把后面所有人的声音换掉。
+4. **放弃 GPU 转写路径**：CPU int8 已 11.6x 实时，而 CUDA 要额外装 ~1.2 GB 运行库；将来换 large-v3 再评估。
+5. **会议**：每轮 AI 上限 3 条、2–3 人、会议中转写后自动发送（单角色仍回填输入框人工确认）、沉默的与会者合规、不另开页面（按 cast 参数化同一对话页）。
+6. **不设会议专属评价维度**：先用内容维度，等真实用过再定，免得历史报告不可比。
+
+### 今天踩到的三个真坑（都已写进 skill）
+
+1. **CTranslate2 谎报 CUDA 可用** —— 它按自身构建参数判断，不看机器有没有运行库：`SPEECH_DEVICE=auto` 会选中 CUDA、模型加载成功、然后第一次编码抛 `libcublas.so.12 is not found`，若不处理则每段音频都 502。现在推理期捕获缺库 → CPU 重建模型重跑同一段。
+2. **Expo SDK 57 用自家 fetch**，multipart 只接受 `string` / `instanceof Blob` / 带 `bytes()` 的对象；旧 RN 写法 `{ uri, name, type }` 抛 `Unsupported FormDataPart implementation`，在客户端表现为网络错误 —— 文案说「连不上后端」，后端却一条请求都没收到。
+3. **手机是黑盒，但 Metro 日志就是它的 console**。判据要这样用：服务器日志空白 + 端上报网络错误 → 先怀疑请求体，再怀疑网络；`console.warn` 出来的 clip URI 与字节数是唯一现场证据。
+
+### 还欠着的
+
+- Phase 5 的正式验收：连续使用后调 rubric、场景质量与反馈长度（真机链路今天已通过）。
+- 离线 TTS（piper）与实时音频/AI 抢话（后者属 §1.4 不做范围）。
+- 端到端冒烟脚本进仓库（`voxora_e2e.py` / `voxora_eval_e2e.py` 仍只在 scratch）。
+- 仍未定：会议议程进度（走完自动结束 vs 学习者点结束）、AI 之间互相打断的密度。
+
