@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from uuid import UUID, uuid4
 
 from fastapi import Depends, FastAPI, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -58,6 +59,13 @@ def create_app(
             await engine.dispose()
 
     app = FastAPI(title="Voxora API", version=settings.app_version, lifespan=lifespan)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_allow_origins,
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
+        allow_headers=["Content-Type", "Authorization", "X-Request-ID"],
+    )
     app.include_router(scenarios_router)
     app.include_router(practice_router)
     app.include_router(review_router)

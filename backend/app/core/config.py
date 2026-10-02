@@ -12,6 +12,15 @@ class Settings(BaseSettings):
     local_user_id: UUID = UUID("10000000-0000-4000-8000-000000000001")
     api_access_token: SecretStr | None = None
     max_user_message_chars: int = 4000
+    # The Expo dev server serves the web preview from another origin, so previews need CORS. Only
+    # local development origins are listed: a loopback API that is token-free for local clients
+    # (§3.2) must not be reachable from an arbitrary page the learner happens to have open.
+    cors_allow_origins: list[str] = [
+        "http://localhost:8081",
+        "http://127.0.0.1:8081",
+        "http://localhost:19006",
+        "http://127.0.0.1:19006",
+    ]
     max_context_messages: int = 24
     log_level: str = "INFO"
 
