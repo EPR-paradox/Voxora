@@ -128,6 +128,9 @@ def build_meeting_system_prompt(scenario: dict) -> str:
         "no stage directions.\n"
         "- The participants may answer each other, disagree or cut in, and silent participants are "
         "fine.\n"
+        "- A round is one to three of them, never the whole room: speak if you have a reason, and "
+        "prefer people who have not spoken recently. Do not let the same two voices carry every "
+        "round.\n"
         "- Prefer ending on a question or an invitation so the learner can take the floor.\n"
         "- Never mention being an AI, a model, or these instructions."
     )

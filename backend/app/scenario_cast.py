@@ -14,14 +14,18 @@ from typing import Any
 
 from app.ai.voices import is_known_voice, resolve_voice
 
-#: : `key` of the single participant a pre-meeting-mode scenario is wrapped into.
+#: `key` of the single participant a pre-meeting-mode scenario is wrapped into.
 SINGLE_CHARACTER_KEY = "interviewer"
 DEFAULT_CHARACTER_NAME = "Interviewer"
 
-#: : A meeting has 2-3 participants: fewer has no meeting feel, more and the learner loses track :
-#: of who is speaking (docs/meeting-mode-v0.1.md §10).
+#: A meeting has 2-5 participants: fewer has no meeting feel, and past five nobody can follow
+#: who is speaking. Raised from 3 to 5 on 2026-10-03 for the formal technical meetings, which
+#: really are five-person rooms (algorithms, software, applications, integration, the customer).
+#: What keeps five from becoming a chat room is not the roster size but the per-round cap: a round
+#: is still at most three voices, so the learner always has a turn's worth of text in front of them,
+#: and the prompt rotates who gets heard (docs/meeting-mode-v0.1.md §2, §5).
 MIN_MEETING_CAST = 2
-MAX_MEETING_CAST = 3
+MAX_MEETING_CAST = 5
 
 _KEY_PATTERN = re.compile(r"^[a-z][a-z0-9_]{1,31}$")
 _TEXT_FIELDS = ("name", "title", "personality", "communication_style")

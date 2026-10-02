@@ -98,7 +98,7 @@ def test_participant_payloads_repair_a_legacy_cast() -> None:
     assert payloads[0]["voice"] in VOICE_CATALOG
 
 
-def test_normalize_cast_accepts_two_to_three_participants() -> None:
+def test_normalize_cast_accepts_two_to_five_participants() -> None:
     stored = normalize_cast(
         [
             {
@@ -165,7 +165,7 @@ def test_normalize_cast_none_means_single_character_scenario() -> None:
             {"key": "eng_lead", "name": "Dana", "voice": "en-US-VanishedNeural"},
             {"key": "pm", "name": "M"},
         ],
-        [{"key": f"p{i}", "name": "x"} for i in range(4)],  # four is too many
+        [{"key": f"p{i}", "name": "x"} for i in range(6)],  # six in one room is too many
         [{"key": "Eng Lead", "name": "Dana"}, {"key": "pm", "name": "M"}],  # key is not a slug
         [{"key": "ENG_LEAD", "name": "Dana"}, {"key": "pm", "name": "M"}],  # key must be lowercase
         [{"key": "eng_lead", "name": "Dana"}, {"key": "eng_lead", "name": "Other"}],

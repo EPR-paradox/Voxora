@@ -701,3 +701,41 @@ chip，凭空造一个新值只会多一个没人要的筛选。真 provider 实
 
 真机验收待做：点「旁听」是否自动推进、声音是否一轮一轮接着播、开麦是否立刻停住推进。
 
+## 2026-10-03（人数）：技术会议扩到 5 人
+
+用户要求正式技术会议 5 人。上限本来是 2–3（两天前定的，理由是「超过 3 个，学习者要额外处理现在跟谁说话」）。
+
+- `MAX_MEETING_CAST` 3 → **5**（`MIN` 仍 2），边界测试改为「6 人越界」。
+- **每轮最多 3 条发言的上限不变** —— 防跑偏的闸门是它，不是人数。5 人场景靠 prompt 的**轮换规则**让每个人都
+  被听到：`A round is one to three of them, never the whole room: speak if you have a reason, and prefer
+  people who have not spoken recently. Do not let the same two voices carry every round.`
+- 5 场技术会议各补 2 位同事（新增三位：`data_eng` Yusuf Demir 数据工程师、`metrology_eng` Hana Sato
+  量测工程师、`customer_qa` Ines Brandt 客户侧整合工程师）；`algo_lead` / `sw_eng` 继续跨场景复用，所以同一位同事
+  在每场会议里声音一致。音色目录 8 个，5 人正好互不重复。
+- 文档：会议草案 §2 与 §10 决策表、主规格 §6.3 的 cast 行（2–3 → 2–5）；规格升 Draft v0.17。
+
+### 实测（真 provider，sampling-plan-tradeoff-01）
+
+```
+与会者  algo_lead(Nadia) / apc_eng(Sofia) / sw_eng(Tobias) / metrology_eng(Hana) / data_eng(Yusuf)
+        五个不同音色（Ava / Prabhat / Sonia / Andrew / Emma）
+
+开场    apc_eng + metrology_eng + algo_lead        3 条
+我发言  apc_eng + data_eng                          2 条
+旁听1   algo_lead + sw_eng + metrology_eng          3 条
+旁听2   apc_eng + sw_eng + data_eng                 3 条
+
+发言次数  apc_eng 3 / metrology_eng 2 / algo_lead 2 / data_eng 2 / sw_eng 2
+从未开口  无          每一轮都不是同一对发言人
+```
+
+内容也是实的：一片一测点 → 看不到片内形状；单点不确定度 0.8 nm；9 点径向 vs 13 点网格；9 点使该层工时 +40%、
+控制环 12→14 小时；`site_position` 不是字段所以加测点进不了同一张表。
+
+**踩到的坑（自己造的）**：我写的注释折行脚本把 Sphinx 风格的 `#:` 注释改成了 `#: :`（把 `#:` 当普通 `#` 处理），
+全库 8 处受影响（`scenario_cast.py`、`schemas.py`、`speech.py`、`edge_tts_synthesis.py`、`speech_synthesis.py`、
+`scenario_seeds_tech.py`、`test_scenario_seeds.py`）。已全部修回。教训写进 skill：折行脚本必须保留 `#:` marker，
+或者干脆不要用它。
+
+测试 275 passed（边界用例跟着改），`ruff` / `format` 干净。
+

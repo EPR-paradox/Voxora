@@ -51,7 +51,7 @@ class FakeSpeechSynthesisProvider:
 
     name = "fake"
     model = "fake-v1"
-    #: : Tests set this to an exception instance to exercise the failure paths.
+    #: Tests set this to an exception instance to exercise the failure paths.
     fail_with: Exception | None = None
 
     async def synthesize(self, text: str, *, voice: str) -> SynthesisResult:

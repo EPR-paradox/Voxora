@@ -12,7 +12,7 @@ import pytest
 from app.db.scenario_seeds_life import TRAVEL_AND_LIFE_SEEDS
 from app.db.seed import SCENARIO_SEEDS
 
-# : Mirrors the CHECK constraint `ck_scenarios_category` (deployment §6.3).
+#: Mirrors the CHECK constraint `ck_scenarios_category` (deployment §6.3).
 CATEGORIES = {"interview", "workplace", "travel", "daily_life"}
 
 

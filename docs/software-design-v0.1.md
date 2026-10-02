@@ -1,7 +1,7 @@
 # Voxora 软件设计详细规格
 
 > 产品副标题：English for the semiconductor world  
-> 文档状态：Draft v0.16（开发规格草案）  
+> 文档状态：Draft v0.17（开发规格草案）  
 > 日期：2026-10-02  
 > 产品需求来源：`../semispeak.md`  
 > 本文目标：让开发者可据此创建工程、实现数据库/API/核心流程，并编写验收测试。
@@ -311,7 +311,7 @@ scenarios N──N skills（通过 scenario_skills）
 | english_level | VARCHAR(20) nullable | CEFR 或内部等级，后续明确 |
 | situation | TEXT | 用户可见背景 |
 | ai_character | JSONB | name/title/personality/communication_style；单角色场景的发言者，会议场景保留为第一位与会者 |
-| cast | JSONB nullable | 会议模式与会者数组（2–3 项：key/name/title/personality/communication_style/voice）；null = 单角色场景。读侧一律走 `scenario_cast()` 归一化，见 `docs/meeting-mode-v0.1.md` §2 |
+| cast | JSONB nullable | 会议模式与会者数组（2–5 项：key/name/title/personality/communication_style/voice）；null = 单角色场景。上限 2026-10-03 由 3 上调到 5（正式技术会议），每轮最多 3 条发言的上限不变，见 `docs/meeting-mode-v0.1.md` §2 |
 | user_objective | TEXT | 用户要完成的沟通任务 |
 | target_skills | JSONB | skill key 数组 |
 | target_expressions | JSONB | expression/meaning/usage 示例 |

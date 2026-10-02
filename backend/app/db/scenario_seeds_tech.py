@@ -9,6 +9,10 @@ front of a customer).
 
 Design notes:
 
+- **Five people, five voices.** A formal technical meeting really is a five-person room (algorithms,
+  software, applications, integration, the customer), so each cast carries five. The per-round cap
+  still holds at three voices: what keeps five from becoming a chat room is the rotation rule in the
+  prompt, not a smaller roster.
 - **Recurring colleagues keep their keys.** `algo_lead` and `sw_eng` appear in several of these, and
   voices
   are derived from the cast key (§9.1), so the same person sounds the same in every meeting. A team
@@ -45,7 +49,7 @@ def _rubric() -> dict[str, Any]:
     }
 
 
-# : The learner's own role in these meetings: metrology algorithms on the equipment side.
+#: The learner's own role in these meetings: metrology algorithms on the equipment side.
 TECH_ROLES = ["algorithm_engineer", "metrology_software_engineer"]
 
 TECH_MEETING_SEEDS: list[dict[str, Any]] = [
@@ -86,6 +90,20 @@ TECH_MEETING_SEEDS: list[dict[str, Any]] = [
                 "title": "Applications Engineer",
                 "personality": "sits between the fab and the code, reports what the customer saw",
                 "communication_style": "starts from the customer's words, then translates",
+            },
+            {
+                "key": "data_eng",
+                "name": "Yusuf Demir",
+                "title": "Data Engineer",
+                "personality": "owns the joins between lot, tool and metrology data",
+                "communication_style": "answers with the field that is missing",
+            },
+            {
+                "key": "metrology_eng",
+                "name": "Hana Sato",
+                "title": "Metrology Engineer",
+                "personality": "owns the measurement recipe and its uncertainty",
+                "communication_style": "puts an uncertainty on every number before agreeing",
             },
         ],
         "user_objective": (
@@ -156,6 +174,20 @@ TECH_MEETING_SEEDS: list[dict[str, Any]] = [
                 "title": "Integration Engineer",
                 "personality": "has the tool schedule and knows what the delay costs",
                 "communication_style": "gives dates, refuses vague ones",
+            },
+            {
+                "key": "metrology_eng",
+                "name": "Hana Sato",
+                "title": "Metrology Engineer",
+                "personality": "owns the measurement recipe and its uncertainty",
+                "communication_style": "puts an uncertainty on every number before agreeing",
+            },
+            {
+                "key": "data_eng",
+                "name": "Yusuf Demir",
+                "title": "Data Engineer",
+                "personality": "owns the joins between lot, tool and metrology data",
+                "communication_style": "answers with the field that is missing",
             },
         ],
         "user_objective": (
@@ -228,6 +260,20 @@ TECH_MEETING_SEEDS: list[dict[str, Any]] = [
                 "personality": "wants the customer to leave happy today",
                 "communication_style": "offers dates and comfort before the engineers have agreed",
             },
+            {
+                "key": "customer_qa",
+                "name": "Ines Brandt",
+                "title": "Customer Integration Engineer",
+                "personality": "backs her colleague with whatever the customer data shows",
+                "communication_style": "quotes the customer's own spec limits",
+            },
+            {
+                "key": "metrology_eng",
+                "name": "Hana Sato",
+                "title": "Metrology Engineer",
+                "personality": "owns the measurement recipe and its uncertainty",
+                "communication_style": "puts an uncertainty on every number before agreeing",
+            },
         ],
         "user_objective": (
             "Report what the data supports, resist committing to a root cause you do not have, and "
@@ -294,6 +340,20 @@ TECH_MEETING_SEEDS: list[dict[str, Any]] = [
                 "title": "Software Engineer",
                 "personality": "cares whether the plan survives contact with the release schedule",
                 "communication_style": "asks what has to change in the pipeline",
+            },
+            {
+                "key": "metrology_eng",
+                "name": "Hana Sato",
+                "title": "Metrology Engineer",
+                "personality": "owns the measurement recipe and its uncertainty",
+                "communication_style": "puts an uncertainty on every number before agreeing",
+            },
+            {
+                "key": "data_eng",
+                "name": "Yusuf Demir",
+                "title": "Data Engineer",
+                "personality": "owns the joins between lot, tool and metrology data",
+                "communication_style": "answers with the field that is missing",
             },
         ],
         "user_objective": (
@@ -366,6 +426,20 @@ TECH_MEETING_SEEDS: list[dict[str, Any]] = [
                 "title": "Algorithms Lead",
                 "personality": "wants the threshold question answered with data, not with feelings",
                 "communication_style": "asks for the capture rate at each candidate threshold",
+            },
+            {
+                "key": "metrology_eng",
+                "name": "Hana Sato",
+                "title": "Metrology Engineer",
+                "personality": "owns the measurement recipe and its uncertainty",
+                "communication_style": "puts an uncertainty on every number before agreeing",
+            },
+            {
+                "key": "data_eng",
+                "name": "Yusuf Demir",
+                "title": "Data Engineer",
+                "personality": "owns the joins between lot, tool and metrology data",
+                "communication_style": "answers with the field that is missing",
             },
         ],
         "user_objective": (

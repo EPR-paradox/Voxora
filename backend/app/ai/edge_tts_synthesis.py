@@ -28,7 +28,7 @@ from app.core.config import Settings
 
 logger = logging.getLogger(__name__)
 
-#: : A meeting line is a few hundred characters of speech; this only has to catch a runaway.
+#: A meeting line is a few hundred characters of speech; this only has to catch a runaway.
 MAX_AUDIO_BYTES = 8 * 1024 * 1024
 
 
