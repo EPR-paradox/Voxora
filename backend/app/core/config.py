@@ -24,6 +24,15 @@ class Settings(BaseSettings):
     ai_model: str = ""
     ai_timeout_seconds: float = 30.0
     ai_max_tokens: int = 400
+    ai_json_mode: bool = True
+
+    # Evaluation is a separate provider with its own limits (design §8.6): it returns a structured
+    # document rather than one spoken turn, so it needs a longer budget and its own timeout.
+    ai_evaluation_timeout_seconds: float = 60.0
+    # Measured against deepseek-flash: one report costs ~2000-2200 completion tokens, roughly half
+    # of it reasoning tokens that emit no visible output, and the split moves between calls. A
+    # budget near the average yields an empty or truncated answer, so the default keeps headroom.
+    ai_evaluation_max_tokens: int = 4000
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

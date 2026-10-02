@@ -6,11 +6,14 @@ from fastapi import Depends, FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from app.ai.evaluation import EvaluationProvider
 from app.ai.openai_compatible import build_roleplay_provider
+from app.ai.openai_compatible_evaluation import build_evaluation_provider
 from app.ai.roleplay import RoleplayProvider
 from app.api.deps import PracticeAccessError, get_database_health
 from app.api.errors import error_response
 from app.api.practice import router as practice_router
+from app.api.review import router as review_router
 from app.api.scenarios import router as scenarios_router
 from app.core.config import settings
 
@@ -18,13 +21,17 @@ from app.core.config import settings
 def create_app(
     database_url: str | None = None,
     roleplay_provider: RoleplayProvider | None = None,
+    evaluation_provider: EvaluationProvider | None = None,
 ) -> FastAPI:
     """Build the application.
 
-    ``roleplay_provider`` is an explicit seam for tests: when it is passed, the app uses it
-    as-is and leaves its lifecycle to the caller. Otherwise the provider is built from
-    settings at startup, so a misconfigured deployment fails to start instead of failing
-    on the first user turn, and the HTTP client it owns is closed on shutdown.
+    ``roleplay_provider`` and ``evaluation_provider`` are explicit seams for tests: when passed, the
+    app
+    uses them as-is and leaves their lifecycle to the caller. Otherwise each is built from settings
+    at
+    startup, so a misconfigured deployment fails to start instead of failing on the first user turn,
+    and
+    the HTTP clients they own are closed on shutdown.
     """
     if settings.app_env != "local":
         raise RuntimeError(
@@ -37,18 +44,23 @@ def create_app(
         engine = create_async_engine(resolved_database_url, pool_pre_ping=True)
         app.state.database_engine = engine
         app.state.session_factory = async_sessionmaker(engine, expire_on_commit=False)
-        provider = roleplay_provider or build_roleplay_provider(settings)
-        app.state.roleplay_provider = provider
+        roleplay = roleplay_provider or build_roleplay_provider(settings)
+        evaluation = evaluation_provider or build_evaluation_provider(settings)
+        app.state.roleplay_provider = roleplay
+        app.state.evaluation_provider = evaluation
         try:
             yield
         finally:
             if roleplay_provider is None:
-                await provider.aclose()
+                await roleplay.aclose()
+            if evaluation_provider is None:
+                await evaluation.aclose()
             await engine.dispose()
 
     app = FastAPI(title="Voxora API", version=settings.app_version, lifespan=lifespan)
     app.include_router(scenarios_router)
     app.include_router(practice_router)
+    app.include_router(review_router)
 
     @app.exception_handler(PracticeAccessError)
     async def handle_practice_access_error(

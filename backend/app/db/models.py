@@ -152,3 +152,88 @@ class Message(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+
+
+class Evaluation(Base):
+    """One evaluation row per practice session (see §9.2)."""
+
+    __tablename__ = "evaluations"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'processing', 'completed', 'failed')",
+            name="ck_evaluations_status",
+        ),
+        CheckConstraint("attempt_count >= 0", name="ck_evaluations_attempt_count"),
+        CheckConstraint(
+            "(status = 'completed' AND result IS NOT NULL) OR (status != 'completed')",
+            name="ck_evaluations_result",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    session_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("practice_sessions.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    rubric_version: Mapped[str] = mapped_column(String(40), nullable=False)
+    provider: Mapped[str] = mapped_column(String(80), nullable=False)
+    model: Mapped[str] = mapped_column(String(120), nullable=False)
+    prompt_version: Mapped[str] = mapped_column(String(40), nullable=False)
+    result: Mapped[dict[str, Any] | None] = mapped_column(JSON_DOCUMENT, nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    attempt_count: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class ReviewItem(Base):
+    """A expression, mistake or pattern the learner wants to review later (§7.10)."""
+
+    __tablename__ = "review_items"
+    __table_args__ = (
+        CheckConstraint(
+            "item_type IN ('expression', 'grammar', 'clarity', 'pronunciation', 'communication')",
+            name="ck_review_items_item_type",
+        ),
+        CheckConstraint(
+            "status IN ('new', 'reviewing', 'mastered', 'archived')",
+            name="ck_review_items_status",
+        ),
+        CheckConstraint("success_count >= 0", name="ck_review_items_success_count"),
+        CheckConstraint("failure_count >= 0", name="ck_review_items_failure_count"),
+        Index("ix_review_items_user_status_due", "user_id", "status", "due_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    user_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    source_session_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("practice_sessions.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    source_message_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("messages.id", ondelete="SET NULL"), nullable=True
+    )
+    item_type: Mapped[str] = mapped_column(String(24), nullable=False)
+    original_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    target_text: Mapped[str] = mapped_column(Text, nullable=False)
+    explanation: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="new")
+    due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    success_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    failure_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )

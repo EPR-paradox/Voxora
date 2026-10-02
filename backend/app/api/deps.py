@@ -7,6 +7,7 @@ from fastapi import Request
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.ai.evaluation import EvaluationProvider
 from app.ai.roleplay import RoleplayProvider
 from app.core.config import settings
 
@@ -39,6 +40,10 @@ async def get_db_session(request: Request) -> AsyncIterator[AsyncSession]:
 
 def get_roleplay_provider(request: Request) -> RoleplayProvider:
     return request.app.state.roleplay_provider
+
+
+def get_evaluation_provider(request: Request) -> EvaluationProvider:
+    return request.app.state.evaluation_provider
 
 
 def require_practice_access(request: Request) -> None:

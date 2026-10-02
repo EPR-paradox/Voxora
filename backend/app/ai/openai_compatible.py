@@ -10,18 +10,20 @@ Design notes:
 - Transport failures are translated into the error contract the practice service already
   understands: ``TimeoutError`` -> HTTP 504, anything else -> HTTP 502.
 - An empty or malformed assistant message is an error, never an empty row in the transcript.
+- The HTTP call itself is shared with the evaluation provider (``openai_compatible_http``).
 """
 
 from __future__ import annotations
 
 import httpx
 
+from app.ai.openai_compatible_http import ModelEndpointError, post_chat_completion
 from app.core.config import Settings
 
 DEFAULT_OPENING_INSTRUCTION = "Begin the roleplay now with your opening turn."
 
 
-class RoleplayProviderError(RuntimeError):
+class RoleplayProviderError(ModelEndpointError):
     """The model endpoint failed or returned a response that cannot be used."""
 
 
@@ -107,37 +109,13 @@ class OpenAICompatibleRoleplayProvider:
         return messages
 
     async def _post(self, messages: list[dict[str, str]]) -> str:
-        payload = {
-            "model": self._model,
-            "messages": messages,
-            "max_tokens": self._max_tokens,
-            "stream": False,
-        }
-        try:
-            response = await self._client.post("chat/completions", json=payload)
-        except httpx.TimeoutException as exc:
-            raise TimeoutError("The model endpoint timed out.") from exc
-        except httpx.HTTPError as exc:
-            raise RoleplayProviderError(f"Model endpoint request failed: {exc}") from exc
-
-        if response.status_code != 200:
-            raise RoleplayProviderError(
-                f"Model endpoint returned HTTP {response.status_code}: {response.text[:300]}"
-            )
-        try:
-            body = response.json()
-        except ValueError as exc:
-            raise RoleplayProviderError("Model endpoint returned a non-JSON body.") from exc
-
-        try:
-            content = body["choices"][0]["message"]["content"]
-        except (KeyError, IndexError, TypeError) as exc:
-            raise RoleplayProviderError(
-                "Model endpoint response is missing the assistant message."
-            ) from exc
-        if not isinstance(content, str) or not content.strip():
-            raise RoleplayProviderError("Model endpoint returned an empty assistant message.")
-        return content.strip()
+        return await post_chat_completion(
+            self._client,
+            model=self._model,
+            messages=messages,
+            max_tokens=self._max_tokens,
+            error_cls=RoleplayProviderError,
+        )
 
 
 def build_roleplay_provider(settings: Settings):
