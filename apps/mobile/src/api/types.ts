@@ -108,6 +108,24 @@ export interface PracticeSessionDetail {
   completed_at: string | null;
 }
 
+export interface PracticeSessionSummary {
+  id: string;
+  scenario: ScenarioReference;
+  status: SessionStatus;
+  turn_count: number;
+  evaluation_status: EvaluationStatus | null;
+  started_at: string;
+  last_activity_at: string;
+  completed_at: string | null;
+}
+
+export interface PracticeSessionListResponse {
+  items: PracticeSessionSummary[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 export interface SendPracticeMessageResponse {
   user_message: PracticeMessage;
   assistant_message: PracticeMessage;

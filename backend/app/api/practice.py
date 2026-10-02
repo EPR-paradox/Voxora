@@ -1,9 +1,9 @@
 """Finish a session, read its evaluation, retry a failed report (design §7.8, §7.9)."""
 
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,6 +29,8 @@ from app.practice_schemas import (
     PracticeMessageResponse,
     PracticeSessionCreated,
     PracticeSessionDetail,
+    PracticeSessionListResponse,
+    PracticeSessionSummary,
     ScenarioReference,
     SendPracticeMessageRequest,
     SendPracticeMessageResponse,
@@ -38,6 +40,7 @@ from app.services.practice import (
     PracticeError,
     create_practice_session,
     get_practice_session,
+    list_practice_sessions,
     send_practice_message,
 )
 
@@ -48,6 +51,36 @@ router = APIRouter(
 )
 
 _RETRYABLE_UNFINISHED = ("pending", "processing")
+
+
+@router.get("", response_model=PracticeSessionListResponse)
+async def list_sessions(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    status: Annotated[
+        Literal["active", "completed", "abandoned"] | None,
+        Query(description="Filter by session state."),
+    ] = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> PracticeSessionListResponse:
+    """The learner's own practice history, newest activity first (§7.7)."""
+    rows, total = await list_practice_sessions(session, status=status, limit=limit, offset=offset)
+    items = []
+    for practice_session, evaluation_status in rows:
+        snapshot = practice_session.scenario_snapshot
+        items.append(
+            PracticeSessionSummary(
+                id=practice_session.id,
+                scenario=ScenarioReference(id=UUID(snapshot["id"]), title=snapshot["title"]),
+                status=practice_session.status,
+                turn_count=practice_session.turn_count,
+                evaluation_status=evaluation_status,
+                started_at=practice_session.started_at,
+                last_activity_at=practice_session.last_activity_at,
+                completed_at=practice_session.completed_at,
+            )
+        )
+    return PracticeSessionListResponse(items=items, total=total, limit=limit, offset=offset)
 
 
 @router.post("", response_model=PracticeSessionCreated, status_code=201)

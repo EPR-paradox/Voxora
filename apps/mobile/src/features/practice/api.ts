@@ -1,9 +1,27 @@
-import { apiRequest, MODEL_CALL_TIMEOUT_MS, newClientMessageId } from "../../api/client";
+import { apiRequest, MODEL_CALL_TIMEOUT_MS, newClientMessageId, toQueryString } from "../../api/client";
 import type {
   PracticeSessionCreated,
   PracticeSessionDetail,
+  PracticeSessionListResponse,
+  SessionStatus,
   SendPracticeMessageResponse,
 } from "../../api/types";
+
+export interface SessionHistoryFilters {
+  status?: SessionStatus | null;
+  limit?: number;
+  offset?: number;
+}
+
+/** The learner's own history, newest activity first (§7.7). */
+export function listSessions(filters: SessionHistoryFilters = {}): Promise<PracticeSessionListResponse> {
+  const query = toQueryString({
+    status: filters.status,
+    limit: filters.limit ?? 20,
+    offset: filters.offset ?? 0,
+  });
+  return apiRequest<PracticeSessionListResponse>(`/practice/sessions${query}`);
+}
 
 export function createSession(scenarioId: string): Promise<PracticeSessionCreated> {
   return apiRequest<PracticeSessionCreated>("/practice/sessions", {

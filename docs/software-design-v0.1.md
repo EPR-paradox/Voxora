@@ -578,6 +578,11 @@ review_items(user_id, status, due_at)
 
 返回当前用户练习摘要，不包含完整消息正文，避免列表响应过大。
 
+字段：`id`、`scenario`（取会话快照里的 id 与 title，而不是当前场景 —— 场景改名不该改写历史练习当时的样子）、
+`status`、`turn_count`、`evaluation_status`（未生成评价时为 null）、`started_at`、`last_activity_at`、
+`completed_at`；按 `last_activity_at` 倒序，同一时刻用 `id` 兜底保证顺序稳定。
+客户端首页靠这一条请求就能区分“继续练”和“看反馈”，不需要逐行再查评价。
+
 ### 7.8 结束练习与生成评价
 
 `POST /api/v1/practice/sessions/{session_id}/finish`

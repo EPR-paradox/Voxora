@@ -70,6 +70,27 @@ class PracticeMessageDetail(PracticeMessageResponse):
     status: Literal["pending", "completed", "failed"]
 
 
+class PracticeSessionSummary(BaseModel):
+    """One row of the learner's history (§7.7). ``scenario`` comes from the session snapshot, so a
+    renamed scenario does not rewrite what a past practice looked like at the time."""
+
+    id: UUID
+    scenario: ScenarioReference
+    status: Literal["active", "completed", "abandoned"]
+    turn_count: int
+    evaluation_status: Literal["pending", "processing", "completed", "failed"] | None
+    started_at: datetime
+    last_activity_at: datetime
+    completed_at: datetime | None
+
+
+class PracticeSessionListResponse(BaseModel):
+    items: list[PracticeSessionSummary]
+    total: int
+    limit: int
+    offset: int
+
+
 class PracticeSessionDetail(BaseModel):
     id: UUID
     scenario: ScenarioReference

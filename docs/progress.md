@@ -102,6 +102,9 @@
 - 验证到哪一步：`tsc --noEmit` 干净；`expo export --platform web` 打包成功（846 模块）；用 headless
   Chrome 逐页渲染真实数据并截图核对（首页 / 场景列表 / 场景详情 / 对话 / 评价 / 复习），
   确认排版正常且数据来自真实 API。
+- 补上 `GET /api/v1/practice/sessions`（§7.7 **本来就有**这个端点，是后端实现漏了它，不是新增契约）。
+  Home 的“继续上次 / 最近练习”现在完全来自服务端，跨设备与重装后都正确；本地那个 session 指针降级为
+  调试信息，不再参与任何决策 —— 两处真相源迟早会不一致。9 个测试覆盖排序、筛选、分页、归属与快照标题。
 - **未验证**：Android 模拟器与真机 —— 本机没有 Android SDK / emulator。§1.3 第 6 条的
   “从 Android Emulator 完成全闭环”要等装了 SDK 或用 Expo Go 真机扫码后才能盖章。
 

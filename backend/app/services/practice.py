@@ -2,12 +2,12 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.roleplay import RoleplayProvider
 from app.core.config import settings
-from app.db.models import Message, PracticeSession, Scenario, User
+from app.db.models import Evaluation, Message, PracticeSession, Scenario, User
 
 
 @dataclass
@@ -87,6 +87,36 @@ async def create_practice_session(
     await session.flush()
     await session.commit()
     return practice_session, scenario_id_value, snapshot["title"], opening_message
+
+
+async def list_practice_sessions(
+    session: AsyncSession,
+    *,
+    status: str | None,
+    limit: int,
+    offset: int,
+) -> tuple[list[tuple[PracticeSession, str | None]], int]:
+    """A learner's own sessions, newest activity first.
+
+    The evaluation status comes back with the session rows: the home screen must tell "resume this"
+    from "read the report" in one request, and a per-row fetch would be an obvious N+1.
+    """
+    filters = [PracticeSession.user_id == settings.local_user_id]
+    if status is not None:
+        filters.append(PracticeSession.status == status)
+
+    total = await session.scalar(select(func.count()).select_from(PracticeSession).where(*filters))
+    rows = await session.execute(
+        select(PracticeSession, Evaluation.status)
+        .outerjoin(Evaluation, Evaluation.session_id == PracticeSession.id)
+        .where(*filters)
+        .order_by(PracticeSession.last_activity_at.desc(), PracticeSession.id)
+        .limit(limit)
+        .offset(offset)
+    )
+    return [
+        (practice_session, evaluation_status) for practice_session, evaluation_status in rows
+    ], (total or 0)
 
 
 async def get_practice_session(
