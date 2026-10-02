@@ -19,7 +19,6 @@ import { newClientMessageId } from "../../src/api/client";
 import { ApiError, describeError } from "../../src/api/errors";
 import { finishSession } from "../../src/features/evaluation/api";
 import { getSession, sendMessage } from "../../src/features/practice/api";
-import { setLastSessionId } from "../../src/storage";
 import { colors, radius, spacing, typography } from "../../src/theme";
 
 interface OutboxItem {
@@ -154,10 +153,7 @@ export default function PracticeScreen() {
             finished ? null : (
               <Pressable
                 disabled={!canFinish}
-                onPress={() => {
-                  void setLastSessionId(session.id);
-                  finish.mutate();
-                }}
+                onPress={() => finish.mutate()}
                 style={({ pressed }) => [pressed && styles.pressed]}
               >
                 <Text style={[styles.headerAction, !canFinish && styles.headerActionDisabled]}>

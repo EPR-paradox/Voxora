@@ -9,7 +9,6 @@ import { ErrorView, LoadingView } from "../../src/components/StateViews";
 import { describeError } from "../../src/api/errors";
 import { createSession } from "../../src/features/practice/api";
 import { getScenario } from "../../src/features/scenarios/api";
-import { setLastSessionId } from "../../src/storage";
 import { categoryLabels, colors, spacing, typography } from "../../src/theme";
 
 export default function ScenarioDetailScreen() {
@@ -24,8 +23,7 @@ export default function ScenarioDetailScreen() {
 
   const start = useMutation({
     mutationFn: () => createSession(scenarioId),
-    onSuccess: async (session) => {
-      await setLastSessionId(session.id);
+    onSuccess: (session) => {
       // replace, not push: coming back to this screen after finishing would offer a second "start".
       router.replace({ pathname: "/practice/[sessionId]", params: { sessionId: session.id } });
     },

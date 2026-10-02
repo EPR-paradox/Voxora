@@ -1,13 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
-import { StyleSheet, Text, View } from "react-native";
+import { StyleSheet, Text } from "react-native";
 
 import { AppButton } from "../src/components/AppButton";
 import { Card } from "../src/components/Card";
 import { Screen } from "../src/components/Screen";
 import { API_BASE_URL, apiRequest } from "../src/api/client";
 import { describeError } from "../src/api/errors";
-import { clearLastSessionId, getLastSessionId } from "../src/storage";
 import { colors, spacing, typography } from "../src/theme";
 
 interface HealthResponse {
@@ -17,9 +15,6 @@ interface HealthResponse {
 }
 
 export default function SettingsScreen() {
-  const [cleared, setCleared] = useState<string | null>(null);
-  const [lastSessionId, setLastSession] = useState<string | null>(null);
-
   const health = useQuery({
     queryKey: ["health"],
     queryFn: () => apiRequest<HealthResponse>("/health"),
@@ -48,29 +43,12 @@ export default function SettingsScreen() {
       </Card>
 
       <Card
-        title="本地缓存"
-        subtitle="只存「上次练到哪」这一个指针。练习记录和反馈都在服务端，清掉不会丢。"
+        title="数据在哪"
+        subtitle="练习记录、反馈、复习项全部在服务端，客户端不留业务数据，换设备或重装都不会丢东西。"
       >
-        <View style={styles.actions}>
-          <AppButton
-            label="看看存的指针"
-            variant="secondary"
-            onPress={() => void getLastSessionId().then(setLastSession)}
-            style={styles.action}
-          />
-          <AppButton
-            label="清掉"
-            variant="secondary"
-            onPress={() => {
-              void clearLastSessionId();
-              setLastSession(null);
-              setCleared("已清空本地指针。");
-            }}
-            style={styles.action}
-          />
-        </View>
-        {lastSessionId ? <Text style={styles.muted}>当前指针：{lastSessionId}</Text> : null}
-        {cleared ? <Text style={styles.muted}>{cleared}</Text> : null}
+        <Text style={styles.muted}>
+          要改后端地址，编辑 apps/mobile/.env.local 里的 EXPO_PUBLIC_API_BASE_URL 再重启 dev server。
+        </Text>
       </Card>
 
       <Card title="这是什么">
@@ -87,5 +65,4 @@ const styles = StyleSheet.create({
   body: { ...typography.body, color: colors.text, lineHeight: 22 },
   muted: { ...typography.caption, color: colors.textMuted, lineHeight: 18 },
   action: { marginTop: spacing.sm },
-  actions: { gap: spacing.sm },
 });
