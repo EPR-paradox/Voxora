@@ -895,3 +895,101 @@ pytest                  281 → 293（test_piper_synthesis.py 8 条 + 工厂 2 �
   公网   合成 200 audio/wav 319 KB 4.32s ／ 转写 200 逐字还原 10.2s
 ```
 
+## 2026-10-03（公网入口 + 打包）：固定域名落地，APK 走出 EAS
+
+### 1. 命名隧道取代 quick tunnel：入口固定成 https://api.semispeak.com
+
+这是 10-02 那节留下的伏笔（quick tunnel 每次重启换域名，而 `EXPO_PUBLIC_API_BASE_URL` 是打包期注入的，
+域名一变 APK 就废；cloudflared 也因此一直不能做成自启服务）。
+
+- 命名隧道 `voxora`（ID `243e0aea-edff-481b-9b07-68a217efe126`），唯一发布的 hostname
+  **api.semispeak.com → http://127.0.0.1:8000**。配置在 `~/.cloudflared/config.yml`，ingress 只有这一条
+  加一条 `http_status:404` 兜底（没有 catch-all 规则 cloudflared 会拒绝启动）。
+- `edge-ip-version: "4"` 是必需的，不是调优：`region1.v2.argotunnel.com` 的首选记录是 IPv6，这条宽带跑不通它。
+- 常驻：systemd user unit `cloudflared-voxora.service`（模板进仓库 `infra/cloudflared-voxora.service`），
+  `UnsetEnvironment` 显式清掉代理变量 —— 走 Mihomo 时 `tunnel login` 报 `Failed to write the certificate: EOF`，
+  而直连本来也不需要它（直连 0.92 s，走代理 3.82 s，出口还在 SJC）。现在 `cloudflared-voxora.service` 与
+  `voxora-api.service` 都是 active running，**公网入口不再依赖任何一次 agent 会话**。
+- `infra/fix-tunnel-after-proxy.sh`：Mihomo 关掉后 systemd-resolved 仍持有它的 fake-ip 答案，cloudflared
+  继续去拨 `198.18.0.x` 这个已经不存在的地址（`no free edge addresses left to resolve to`），隧道断，
+  手机拿到 Cloudflare 530 —— 现象看起来像"关掉代理把站点弄坏了"，其实是 DNS 缓存。脚本做三件事：
+  `resolvectl flush-caches`、重启 unit、等到 `Registered tunnel connection` 出现再 curl 公网 health。
+
+### 2. 真机在 5G 下连不上：是地址写错了，不是服务问题
+
+用户手机上填的 API 地址是 **192.168.1.6**（本机 enp8s0 的局域网地址）。切到蜂窝网后这个地址跟手机根本不在
+同一网段，连不上是必然的。公网入口本身一直是好的，从这台机器直连实测：
+
+```
+GET https://api.semispeak.com/api/v1/health                   → 200  1.03 s
+GET https://api.semispeak.com/api/v1/review-items?status=new  → 200（带 Bearer，返回真实复习项）
+cloudflared tunnel info voxora                                → 4 条 edge 连接（origin 183.195.9.109）
+```
+
+结论：**对外只有 https://api.semispeak.com 这一个地址是对的**；局域网 IP 只在本机同网段自测里有意义。
+（注意本机 curl 必须 `--noproxy '*'`：环境里的 HTTP_PROXY 指向没启动的 Mihomo，会直接 `Connection refused`。）
+
+### 3. APK 走 EAS 云构建
+
+选型依据是带宽：本机出口实测 **~1.1 MB/s**（JDK 193 MB 下了 172 s，cmdline-tools 153 MB 下了 132 s）。本地出包
+要先拖 NDK + CMake + Maven 约 2–3 GB，纯下载就是 40–60 分钟；EAS 只上传源码，**1.6 MB / 2 秒**。
+
+- `eas init` 关联到 `@physicompute/voxora`（ID `df4b049f-facb-4231-a11a-73efd9266f0d`）。它会顺手把
+  `android.permissions`（RECORD_AUDIO / MODIFY_AUDIO_SETTINGS / FOREGROUND_SERVICE /
+  FOREGROUND_SERVICE_MEDIA_PLAYBACK）写进 app.json —— expo-audio 需要，留着。
+- **最大的坑：`.env.local` 到不了云端。** EAS 按 git 打包，被 gitignore 的 `.env.local` 不在包里，于是
+  `EXPO_PUBLIC_API_BASE_URL` 与 `EXPO_PUBLIC_API_ACCESS_TOKEN` 双双 undefined —— APK 装得上、开得起来，
+  但每个请求都发不出去，而且没有任何报错指向真正原因（第一次构建就是栽在这，发现后中止重跑）。改用 EAS
+  环境变量注入，两个值都不进 git：
+
+```
+eas env:create --name EXPO_PUBLIC_API_BASE_URL --value "https://api.semispeak.com/api/v1" \
+  --environment preview --visibility plaintext
+eas env:create --name EXPO_PUBLIC_API_ACCESS_TOKEN --value "<从 .env.local 读出的值>" \
+  --environment preview --visibility sensitive
+```
+
+  构建日志里必须出现 `Environment variables ... loaded from the "preview" environment` 才算接上；
+  `eas env:list` 里 sensitive 变量的值显示为 `***`。
+- 同理**不要用 `EAS_NO_VCS=1`** 去绕过"工作树必须干净"的检查：那是改成打包工作目录，会把含 token 的
+  `.env.local` 一起上传。
+- 首次构建会问 `Generate a new Android Keystore? (Y/n)` —— 答 Y。keystore 存在 Expo 云端，之后每次构建
+  签名一致、可以互相覆盖安装。这个提示是真交互的（`--non-interactive` 在无凭据时直接失败），所以用 pty 应答。
+- 命令与追踪：
+
+```
+cd apps/mobile && env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy \
+  eas build -p android --profile preview --no-wait
+eas build:view <id> --json        # IN_QUEUE / IN_PROGRESS / FINISHED / ERRORED / CANCELED
+```
+
+  构建 ID `5d5443e7-1773-41de-a81b-22e4500ec238`，APK 链接在 `artifacts.buildUrl`；不用任何工具的话，
+  `expo.dev/accounts/physicompute/projects/voxora/builds` 页面上直接有下载按钮。
+- `expo prebuild` 顺手把 `package.json` 的 `android`/`ios` 脚本改成了 `expo run:android` / `expo run:ios` ——
+  项目仍在用 Expo Go 开发，已还原；`android/` 本身被 gitignore（EAS 在云端自己重新生成）。
+
+### 4. 本地工具链（备用路径，已就位）
+
+万一要走本地 `assembleRelease`，前置已经装好，全在用户目录、不动系统、不需要 sudo：
+
+```
+JDK 17 Temurin    /home/j/toolchains/jdk17
+Android SDK       /home/j/Android/Sdk（目前只有 cmdline-tools 12.0，路径按 latest/ 规范摆好）
+Gradle 9.3.1      /home/j/toolchains/gradle-9.3.1-bin.zip（腾讯镜像 137 MB）
+```
+
+还缺 NDK + CMake；且 prebuild 生成的 release build type 用的是 debug keystore（侧载够用，上架不够）。
+
+### 5. 提交与仓库状态
+
+- `237a362` infra: cloudflared tunnel unit and post-proxy repair script
+- `894a27e` mobile: link the EAS project and declare the audio permissions
+- 工作树 clean（这也是 `eas build` 能跑起来的前提）。本地领先 `origin/main` **3 个提交**
+  （`894a27e` / `237a362` / `eda1469`），推送仍需先在 7890 上把 Mihomo 起起来。
+
+### 还没做
+
+- 首次 EAS 构建的结果（排队中）与真机验收：开麦、旁听自动推进、播放链路，都还没在这个独立 APK 上跑过。
+- 装了 APK 之后，Expo Go 那套（Metro dev server + 局域网地址）就只是开发工具，不再是验收环境。
+
+
