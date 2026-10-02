@@ -1,7 +1,7 @@
 # Voxora 软件设计详细规格
 
 > 产品副标题：English for the semiconductor world  
-> 文档状态：Draft v0.4（开发规格草案）  
+> 文档状态：Draft v0.5（开发规格草案）  
 > 日期：2026-10-02  
 > 产品需求来源：`../semispeak.md`  
 > 本文目标：让开发者可据此创建工程、实现数据库/API/核心流程，并编写验收测试。
@@ -604,6 +604,10 @@ review_items(user_id, status, due_at)
 - 保存唯一 session evaluation，retry 更新同一记录 attempt_count，不重复插入。
 - 评价输入只使用用户与 assistant 对话、场景目标和 rubric；不向评价 Prompt 传入密钥或无关用户数据。
 - UI 若请求超时，先 GET session 查看 evaluation 状态，再决定是否 retry，不能盲目创建新 session。
+- 三种结果用同一个响应结构表达，不靠 HTTP 状态码区分：评价成功 → `evaluation_status=completed` + `evaluation`；评价失败 → `evaluation_status=failed` + `error_code` + `retryable=true` + `evaluation=null`；重复调用 → 直接回放已保存的结果。
+- 评价失败**不**用 5xx 表达。会话确实已经结束，把报告的状态放进响应正文，客户端从「首次调用」到「重放」只写一条分支；5xx 会与「会话结束失败」混淆，而后者不可能发生。
+- `error_code` 取值：`ai_provider_timeout`、`invalid_ai_output`（模型输出无法通过 §8.3 校验）、`ai_provider_error`（协议层失败，包含模型返回空内容或答案被 token 上限截断）。
+- `GET /{id}/evaluation` 复用同一结构：`pending`/`processing` 返回 202，`completed`/`failed` 返回 200，尚无评价返回 404 `evaluation_not_found`。
 
 ### 7.9 获取评价
 
@@ -747,6 +751,13 @@ Roleplay 输出只包含下一句角色回复（可选内部结束标记）；�
 - 技术问题答错不等于英语差；若影响沟通清晰度，可以指出“表达未说明依据”，但不判技术正确性。
 - 建议重写不得改变用户原意；无法确认意图时提出澄清，不臆造技术事实。
 - 保存 `provider`, `model`, `prompt_version`, `rubric_version`，用于复现与后续评估。
+
+实现约定（2026-10-02 实测）：
+
+- 评价 provider 的 token 预算与超时独立配置（`AI_EVALUATION_MAX_TOKENS` / `AI_EVALUATION_TIMEOUT_SECONDS`），不沿用 roleplay 的值。
+- 实测（`deepseek-flash`）：一次评价消耗 2000–2800 completion tokens，其中约一半是模型内部推理开销、不产生可见输出，且逐次浮动。预算贴近这个平均值就会得到空输出或半截 JSON；默认 4000 是留了余量的值。
+- 空输出与「输出通不过 §8.3 校验」是瞬时故障（同一请求换个时刻即成功），provider 内部各重试一次；**超时不重试**——已经等满一个超时窗口，重试只会让用户等两倍。两次都失败才写 `failed`，交给 §9.2 的显式 retry。
+- 实测延迟：三轮对话后生成评价约 13–15 秒（本机直连 DeepSeek）。
 
 ### 8.5 Prompt 版本管理
 
@@ -900,16 +911,23 @@ APP_ENV=local
 APP_NAME=voxora-api
 API_V1_PREFIX=/api/v1
 DATABASE_URL=postgresql+asyncpg://voxora:voxora_dev_only@localhost:5432/voxora
+LOCAL_USER_ID=10000000-0000-4000-8000-000000000001
+API_ACCESS_TOKEN=
 AI_PROVIDER=mock
+AI_BASE_URL=https://api.deepseek.com/v1
 AI_API_KEY=
 AI_MODEL=
 AI_TIMEOUT_SECONDS=30
+AI_MAX_TOKENS=400
+AI_JSON_MODE=true
+AI_EVALUATION_TIMEOUT_SECONDS=60
+AI_EVALUATION_MAX_TOKENS=4000
 SPEECH_PROVIDER=faster_whisper
 SPEECH_MODEL=distil-large-v3
 SPEECH_DEVICE=auto
-SPEECH_TIMEOUT_SECONDS=60
-MAX_AUDIO_SECONDS=60
-MAX_AUDIO_MB=10
+SPEECH_TIMEOUT_SECONDS=180
+MAX_AUDIO_SECONDS=300
+MAX_AUDIO_MB=32
 MAX_USER_MESSAGE_CHARS=4000
 MAX_CONTEXT_MESSAGES=24
 LOG_LEVEL=INFO
@@ -1082,7 +1100,7 @@ Local Speech Provider / faster-whisper (optional; FakeSpeechProvider in tests)
 这些事项不阻挡本地骨架与文本闭环开发，但对应功能上线前必须明确：
 
 1. 首版是否只由本人使用；是否计划马上邀请外部测试用户。
-2. AI 服务商、可接受月成本和可接受响应时长。
+2. AI 服务商、可接受月成本和可接受响应时长。**响应时长已定（2026-10-02 实测）**：`deepseek-flash` 单轮 roleplay 1.1–2.2 秒，完整评价 13–15 秒，均可接受；月成本待账单累计后确认。
 3. 首批 10 个左右高质量场景的清单及人工校对责任。
 4. 英语评价使用三档描述还是其他等级；各维度的明确定义。
 5. 文本 transcript 的保留/删除方式。

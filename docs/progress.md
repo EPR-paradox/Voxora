@@ -56,6 +56,35 @@
    - 验证脚本是临时文件（`/home/j/.hermes/cache/scratch/voxora_e2e.py`），尚未进仓库；
      产生的 session `7dcae123-c390-47c5-9430-6e9f41f87ffa` 留在库里。
 
+7. Phase 3 完成：Evaluation 与复习（§1.3 第 4、5 条）
+   - 新增 `evaluations` / `review_items` 两张表（迁移 `5d07a878bd32`）：session 唯一约束、
+     completed 必须有 result 的 CHECK、item_type/status 的 CHECK、review 列表索引。
+   - `EvaluationProvider` 协议 + `FakeEvaluationProvider` + `OpenAICompatibleEvaluationProvider`
+     （json mode）。评价 prompt 存在 `app/ai/prompts/evaluation_english_v1.txt`，版本随评价落库，
+     存下的报告能追到产生它的 prompt。
+   - 输出校验（`app/ai/evaluation.py`）：五个维度必须齐全、rating 只能是三档、evidence 必须能在
+     学习者发言里找到（规范化后严格子串匹配，≥6 词的引用才允许 85% 词重叠的容错）。整份报告一条
+     可归属的 evidence 都没有就直接判失败 —— 编造的语言报告比失败更糟。
+   - 端点：`POST /sessions/{id}/finish`、`GET /sessions/{id}/evaluation`、
+     `POST /sessions/{id}/evaluation/retry`，统一响应结构
+     （evaluation_status / error_code / retryable / attempt_count）。
+   - 评价失败不返回 5xx：会话确实结束了，报告状态放正文，客户端从首次调用到重放只写一条分支。
+     同一 session 永远只有一行 evaluation，retry 只递增 attempt_count。
+   - Review Item：`GET/POST /api/v1/review-items`、`PATCH /api/v1/review-items/{id}`。只允许改
+     status / due_at / success_count / failure_count，归属字段客户端改不了（有测试盯着）。
+   - 测试 92 → 101：输出校验 16 条、API 契约 14 条、review 13 条、评价 provider 9 条。
+
+8. 真 provider 评价实测（第一次端到端生成真实评价）
+   - 预算教训：`AI_EVALUATION_MAX_TOKENS` 初值 1200 时**必然失败**。`deepseek-flash` 一次评价消耗
+     2000–2800 completion tokens，其中约一半是模型内部推理开销、不产生可见输出，逐次浮动；
+     预算烧在推理上，content 就是空的或被截断。默认值改为 4000。
+   - 因此补了两道防御：HTTP 层检查 `finish_reason=length` 并报明确错误（不再把半截 JSON 丢给下游
+     去猜）；provider 内部对「空输出 / 校验失败」各重试一次（这类故障换个时刻就成功），**超时不重试**。
+   - 实测结果：预算 4000 下连续 2 次 finish 均 attempt=1 成功。评价质量可用 —— evidence 全部来自
+     学习者原话，指出的是「回答了但没答到点上」「More frames means → More frames mean」这类具体问题，
+     不评判技术结论（符合 §8.4）。
+   - 延迟：单轮 roleplay 1.1–2.2 秒；三轮对话后生成评价 13–15 秒。
+
 ### 仓库状态
 
 - 仓库已公开：https://github.com/EPR-paradox/Voxora（2026-10-02 设为 public）
@@ -63,7 +92,8 @@
   本仓库已设 user.email，后续提交不再泄露复旦邮箱）、设计文档 §1.1 去个人化、全历史密钥扫描。
 - HEAD：ae0dffa（provider 接入）。提交历史 6 个：设计规格 → scenario 目录后端 → 文本练习会话流 →
   文档语音决策 → provider 接入 → 设计文档 v0.4。
-- 工作树：本轮文档提交后干净。
+- 工作树：本地领先远端 1 个提交（`82274fd`），push 未能完成 —— 本机代理（Mihomo Party，
+  `127.0.0.1:7890`）当时没有运行，而国内直连 github.com:443 超时。开代理后 `git push origin main` 即可。
 - 质量门禁全绿：`pytest` 45 passed；`ruff check` / `ruff format --check` 均通过。
 - `.env` 保持 `AI_PROVIDER=mock`（默认开发不烧钱）；真实 provider 的端到端验证靠环境变量注入 key 完成，
   见上一节第 6 条。
@@ -79,22 +109,19 @@
 
 ### 对照设计文档 §1.3 验收条件
 
-已满足：1（场景筛选）、2（创建会话 + 快照）、3（多轮 roleplay，AI 不逐轮点评）、6（历史可恢复）、7（Fake Provider 可替换）、8（PyCharm 断点 + 空库迁移）。
+**八条全部满足**：1–3、6–8 见前几节；4（结束练习 + 结构化评价）与 5（复习项）由本节的 Phase 3
+补齐，各自有契约测试兜底。
 
-未完成：
-- 4 结束练习 + 生成结构化评价（§7.8 / §7.9，evaluation 状态机未落地）
-- 5 复习项（§7.10）
-- 前端 / 移动端整体未开始（§10）
-- 真实 provider 已在真 key 下端到端跑通（见上一节第 6 条），但这条路径还没有可重复的脚本固化下来
+剩余缺口只有一个：前端 / 移动端整体未开始（§10）。另外真 provider 的冒烟脚本还是临时文件，
+尚未固化进仓库。
 
 ### 下一步
 
-Phase 3 —— Evaluation 与复习。这是后端 MVP 闭环的最后一块，对应 §1.3 第 4、5 条：
+后端 MVP 闭环已经完整（选场景 → 练习 → 结构化反馈 → 复习 → 再练），接下来是 Phase 4 —— Android 客户端：
 
-1. Evaluation 模型 + 状态机（§9.2）：结束时生成、失败可重试、同一 session 不重复生成。
-2. §8.3 结构化输出 schema 与校验：评价必须带用户原话证据，只评英语沟通，不评判技术结论。
-3. §7.8 / §7.9 端点：结束会话、获取评价、重试评价。
-4. §7.10 Review Item CRUD。
-5. 评价 prompt 的版本管理（§8.5），保证反馈可追溯。
-6. 把真 provider 冒烟脚本固化进仓库（读环境变量即可跑），让“真 key 能通”成为一条可重复的命令，
+1. Expo + TypeScript 工程骨架 + API client（`EXPO_PUBLIC_API_BASE_URL`）。
+2. Scenario 列表/筛选 → Practice 对话页 → Evaluation 报告页 → Review 列表页。
+3. Emulator 上跑通全闭环；断网/超时提示可恢复；App 重启后历史可加载（§1.3 第 6 条）。
+4. 把真 provider 冒烟脚本固化进仓库（读环境变量即可跑），让“真 key 能通”成为一条可重复的命令，
    而不是一次性手工验证。
+5. 语音（Phase 5）继续往后排：它只是输入方式，闭环价值已经在文本路径上兑现。
