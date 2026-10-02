@@ -251,4 +251,43 @@ Phase 6 级别的产品变更（不是给 Phase 5 加个接口），范围定为
   `test_scenario_cast.py` 19 条、`test_message_speakers.py` 5 条 —— 后者专门盯「同一轮两个 AI 可以各说一句」
   与「同一轮只能有一条学习者消息」这两条互为反向的约束）。
 
-下一步 6.2：Provider 多角色剧本生成 + 输出校验 + 契约升级到 `assistant_messages: [...]`。
+### 2026-10-02（夜）会议模式 6.2 / 6.3 / 6.5 完成：一场会议真的能开起来
+
+**Provider（6.2）**
+
+- 契约变复数：`RoleplayProvider.opening_turns()` / `reply()` 返回 `list[RoleplayTurn]`（`speaker_key` + `content`）。
+  单角色场景是退化情形：恰好一条，key 由 `scenario_cast()` 决定（旧的 `ai_character` 场景是 `interviewer`）。
+- 一次调用产出整段剧本（1–3 条，json mode，`AI_MEETING_MAX_TOKENS` 初值 1200），不是每个角色各调一次。
+  Fake provider 在会议里回两条，客户端的分组与多行写入路径因此不需要模型就能测。
+- 输出校验：`speaker` 必须在 cast 内、1–3 条、每条 ≤60 词、非相邻的同一发言人判不合格；不合格按 §13.2
+  重试一次，两次都坏才 502，且整轮不落库。
+- **实测踩到的坑（值得记）**：deepseek-flash 带着 `response_format={"type":"json_object"}` 也会用提示词里的
+  roster 记法回话（`[eng_lead] ...`），不是 JSON。第一次真机验收因此吃了两次 502（内容其实完全正确，只是
+  格式）。修法两条：提示词里写死「只输出一个 json 对象、不要 `[speaker]` 行、不要 markdown 围栏」，同时让
+  解析器接受两种形状（json 允许被 ``` 围栏包住；逐行 `[key] 内容`），两者走同一套校验。读不懂的格式才算失败。
+  另外：同一位与会者在同一轮里重复出现（非相邻）会被唯一约束挡住，判不合格；相邻两句合并成一条。
+- 真 provider 实测：3 人设计评审，开场 3 条、两轮追问分别 3 条与 2 条（模型自己决定谁不必发言），参与者会
+  互相点名回应（"Careful, Dana."）并追问具体数字；单轮 1.6–6.1 秒。
+
+**服务层与 API（6.3）**
+
+- 一轮 = 1 条用户消息 + 1..N 条 AI 发言，**同一事务写入**、`seq` 连续；幂等重放返回同一组、同一顺序。
+- `POST /messages` 响应从 `assistant_message` 改为 `assistant_messages: [...]`（破坏性，一次性切换，不留兼容
+  分支）；每条消息带 `seq` / `speaker_key` / `speaker`（`{key,name,title}`，来自会话快照）。
+- `GET /sessions/{id}` 增 `participants`；`GET /scenarios/{id}` 增 `cast`（null = 单角色场景）。
+- 测试 169 → 197：新增 `test_meeting_provider.py`（提示词、两种输出形状、围栏、未知发言人、超长、重复发言人、
+  重试与两次失败）与 `api/test_meeting_flow.py`（两个声音的开场、一轮两行且 seq 连续、重放同一组、cast 下发、
+  单角色场景不受影响）。
+
+**场景种子（6.5）**：`design-review-scope-01`（3 人：工程负责人 / 产品经理 / QA）与 `standup-blocker-01`
+（2 人：组长 / 现场工程师）。种子写入前过 `normalize_cast()`（越界的 cast 存不进库），`ai_character` 镜像第一位
+与会者以兼容旧读者。
+
+**客户端（6.4）**：**没有另开 Meeting 页** —— 计划里这一步原本是新页面，动手时改成「同一个对话页按 cast 参数化」，
+因为 outbox / 失败重试 / `client_message_id` / 结束练习那套逻辑复制一份到新页面必然漂移。现在 `participants > 1`
+时会话页顶部有与会者条，AI 气泡左侧竖线取发言人颜色（由 key 稳定哈希派生），名字只在换人那条显示，同一人连续
+发言收紧间距。场景详情页也列出参会人。`tsc --noEmit` 干净，web 预览渲染核对通过（截图
+`~/.hermes/cache/scratch/meeting.png`），真机待确认。
+
+**规格同步**：主规格升 Draft v0.10（§6.3 表、§7.4、§7.6、§7.7、§9.3、§10.1）；会议草案升到记录实测与修正后的
+客户端方案。`ruff check` / `ruff format --check` 全过；`pytest -q` 197 passed。

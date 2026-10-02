@@ -1,7 +1,7 @@
 # Voxora 软件设计详细规格
 
 > 产品副标题：English for the semiconductor world  
-> 文档状态：Draft v0.9（开发规格草案）  
+> 文档状态：Draft v0.10（开发规格草案）  
 > 日期：2026-10-02  
 > 产品需求来源：`../semispeak.md`  
 > 本文目标：让开发者可据此创建工程、实现数据库/API/核心流程，并编写验收测试。
@@ -310,7 +310,8 @@ scenarios N──N skills（通过 scenario_skills）
 | difficulty | SMALLINT | 1–5 CHECK |
 | english_level | VARCHAR(20) nullable | CEFR 或内部等级，后续明确 |
 | situation | TEXT | 用户可见背景 |
-| ai_character | JSONB | name/title/personality/communication_style |
+| ai_character | JSONB | name/title/personality/communication_style；单角色场景的发言者，会议场景保留为第一位与会者 |
+| cast | JSONB nullable | 会议模式与会者数组（2–3 项：key/name/title/personality/communication_style/voice）；null = 单角色场景。读侧一律走 `scenario_cast()` 归一化，见 `docs/meeting-mode-v0.1.md` §2 |
 | user_objective | TEXT | 用户要完成的沟通任务 |
 | target_skills | JSONB | skill key 数组 |
 | target_expressions | JSONB | expression/meaning/usage 示例 |
@@ -363,13 +364,15 @@ scenarios N──N skills（通过 scenario_skills）
 | session_id | UUID | FK practice_sessions.id ON DELETE CASCADE |
 | client_message_id | UUID | 客户端生成；用于请求重试幂等 |
 | turn_index | INTEGER | 从 1 递增；同一用户输入与 AI 回复共享 turn_index |
+| seq | INTEGER | 会话内展示顺序，> 0。客户端按它排序；`created_at` 不行（同一事务里 `now()` 是常量） |
 | role | VARCHAR(12) | user/assistant |
+| speaker_key | VARCHAR(32) | NOT NULL DEFAULT ''；空串 = 学习者，否则为 `cast[].key`。**不用 NULL**：唯一约束里 NULL 互不相等，可空等于放弃约束 |
 | content | TEXT | 文本内容；长度上限由 API 配置 |
 | status | VARCHAR(12) | pending/completed/failed |
 | audio_metadata | JSONB nullable | 始终为 null；音频不写入数据库（见 §7.11） |
 | created_at | TIMESTAMPTZ | not null |
 
-约束：`UNIQUE(session_id, client_message_id, role)`；`UNIQUE(session_id, turn_index, role)`。AI 回复与用户输入分别各一条记录。
+约束：`UNIQUE(session_id, client_message_id, role)`；`UNIQUE(session_id, turn_index, role, speaker_key)`（v0.10 起：一轮里每个发言人各一条，会议因此可以有 1–3 条 AI 记录，而学习者那一轮仍只能有一条）。
 
 #### `evaluations`
 
@@ -501,7 +504,7 @@ review_items(user_id, status, due_at)
 
 `GET /api/v1/scenarios/{scenario_id}`
 
-返回详细 situation、角色简介、用户目标、目标表达、预估时长。**不返回隐藏的 `roleplay_instructions`、评价标准内部权重或 system prompt。**
+返回详细 situation、角色简介、用户目标、目标表达、预估时长，以及会议场景的 `cast`（与会者，`null` 表示单角色场景）。**不返回隐藏的 `roleplay_instructions`、评价标准内部权重或 system prompt。**
 
 ### 7.5 创建练习会话
 
@@ -549,25 +552,32 @@ review_items(user_id, status, due_at)
 ```json
 {
   "user_message": {
-    "id":"uuid","client_message_id":"uuid","turn_index":1,
-    "role":"user","content":"I worked on a measurement pipeline that...",
+    "id":"uuid","client_message_id":"uuid","turn_index":1,"seq":2,
+    "role":"user","speaker_key":"","speaker":null,
+    "content":"I worked on a measurement pipeline that...",
     "created_at":"2026-10-01T12:01:00Z"
   },
-  "assistant_message": {
-    "id":"uuid","turn_index":1,"role":"assistant",
-    "content":"What was the main challenge you had to solve?",
-    "created_at":"2026-10-01T12:01:03Z"
-  },
+  "assistant_messages": [
+    {
+      "id":"uuid","turn_index":1,"seq":3,"role":"assistant",
+      "speaker_key":"eng_lead",
+      "speaker":{"key":"eng_lead","name":"Dana Whitfield","title":"Engineering Lead"},
+      "content":"What was the main challenge you had to solve?",
+      "created_at":"2026-10-01T12:01:03Z"
+    }
+  ],
   "session_status":"active"
 }
 ```
+
+**AI 回复永远是数组**（v0.10 起）：单角色场景是一个元素，会议场景是 1–3 个（`docs/meeting-mode-v0.1.md` §5）。客户端只写一条渲染分支。每条消息带 `seq`（会话内展示顺序，客户端按它排序而不是按数组位置）与 `speaker_key`（空串 = 学习者；绝不为 null）。
 
 行为约定：
 
 1. content 去除首尾空白；空字符串 422；超过配置长度 413 或 422（实现统一选一种并写测试）。
 2. session 不属于当前用户或不存在时统一返回 404，避免泄露资源存在性。
 3. session 非 active 时返回 409 `session_not_active`。
-4. `client_message_id` 已处理时返回已保存的原结果，不再次调用模型，保证移动网络重试幂等。
+4. `client_message_id` 已处理时返回已保存的原结果（会议场景是**同一组、同一顺序**的多条 AI 发言），不再次调用模型，保证移动网络重试幂等。
 5. 同一 session 同时只处理一轮消息；若 `processing_turn_id` 已占用，返回 409 `turn_in_progress`。
 6. AI 超时：用户消息保留为 failed/pending 状态，释放 processing lock；返回 502 `ai_provider_timeout`，客户端可用同一个 client_message_id 重试。
 7. 对话上下文仅加载当前 session 的场景快照和最近 N 轮消息；N 从配置读取，超限策略为保留开场、最近消息及必要摘要。MVP 首轮不做自动总结，超过 token/字符预算时返回可解释的 `context_limit_reached`，并记录指标。
@@ -575,6 +585,8 @@ review_items(user_id, status, due_at)
 并发实现要求：使用短事务原子声明 `processing_turn_id`，提交事务后再调用外部模型；不得在等待 LLM 时长期持有数据库事务/行锁。成功后用新短事务写 AI 消息、更新 turn_count 和 last_activity_at、清除 processing 标记。进程崩溃遗留的 processing 状态由请求超时回收；具体超时时长配置化。
 
 ### 7.7 获取练习详情/历史
+
+会话详情返回 `participants`（本会话自己快照里的与会者：`key`/`name`/`title`）与每条消息的 `seq`、`speaker_key`、`speaker`。客户端不解析 `scenario_snapshot`。
 
 `GET /api/v1/practice/sessions/{session_id}`
 
@@ -843,7 +855,7 @@ PENDING → PROCESSING → COMPLETED
 外部 AI 调用不可与数据库事务保持原子性。实现采用“幂等键 + pending 消息 + 短事务 + 可重试”而不是假设外部调用能回滚：
 
 1. 事务 A：确认 session active、确认无 processing turn、创建用户消息 pending、设置 processing_turn_id；提交。
-2. 调用 provider（事务外）。
+2. 调用 provider（事务外）。会议场景下 provider 一次返回 1–3 条发言。
 3. 成功时事务 B：用户消息标记 completed、插入 assistant message、更新计数/时间、清 processing_turn_id；提交。
 4. provider 失败时事务 B：用户消息标记 failed、清 processing_turn_id；保留同 client_message_id 重试依据。
 5. 复用 client_message_id 的重试不得追加第二条用户消息；若已成功则返回原用户/助手消息；若失败则重新请求 provider。
@@ -856,7 +868,7 @@ PENDING → PROCESSING → COMPLETED
 1. **Home**：继续练习、今日建议场景、最近练习；不显示虚假能力分数。
 2. **Scenario List**：分类筛选（Interview / Workplace / Travel & Life）、岗位和难度筛选。
 3. **Scenario Detail**：Situation、AI 角色、练习目标、预计时间、开始按钮。
-4. **Practice**：对话列表、文本输入、发送状态、结束按钮；防止发送中重复点击。
+4. **Practice**：对话列表、文本输入、发送状态、结束按钮；防止发送中重复点击。会话的场景有 `cast`（会议）时，同页顶部显示与会者条、每条 AI 消息带发言人名字与颜色、同一人连续发言视觉成组。**不为会议另开页面**：outbox、失败重试、`client_message_id` 那套逻辑复制一份必然漂移，差异是 props 不是页面。
 5. **Evaluation**：总结、优势、最多 3 个改进、原句与改写、加入复习按钮。
 6. **Review List**：待复习表达、状态、练习结果；卡片可点入详情。
 7. **Review Detail**：一条复习项的完整内容 —— 用户原话、推荐表达、解释、复习记录（记住/忘了次数、下次复习、加入时间），以及返回来源练习反馈的入口（`source_session_id`）。在此页也可直接标记「记住了 / 还没记住」，与列表页共用同一套间隔阶梯。
