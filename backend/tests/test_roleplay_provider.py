@@ -321,21 +321,26 @@ async def test_rejected_request_is_not_retried() -> None:
 
 
 @pytest.mark.asyncio
-async def test_truncated_answer_is_not_retried() -> None:
-    """`finish_reason=length` is a token budget that is too small: the same call truncates again."""
+async def test_truncated_answer_is_retried_once() -> None:
+    """A truncation is a lottery on this model, not a property of the request.
+
+    Measured 2026-10-02: the same prompt produced 1627 characters of internal reasoning on one
+    call and 0 on the next, so when the budget runs out the answer comes back empty and the
+    learner sees a bare 502. One more attempt is cheaper, and the budget was raised too.
+    """
     calls: list[httpx.Request] = []
     truncated = httpx.Response(
         200,
         json={
             "choices": [
                 {
-                    "message": {"role": "assistant", "content": "half a sen"},
+                    "message": {"role": "assistant", "content": ""},
                     "finish_reason": "length",
                 }
             ]
         },
     )
-    handler = _counting_handler([truncated], calls)
+    handler = _counting_handler([truncated, truncated], calls)
 
     provider = provider_with_handler(handler)
     try:
@@ -344,7 +349,45 @@ async def test_truncated_answer_is_not_retried() -> None:
     finally:
         await provider.aclose()
 
-    assert len(calls) == 1
+    assert len(calls) == 2, "the truncation is retried exactly once, then reported"
+
+
+@pytest.mark.asyncio
+async def test_a_retried_truncation_can_still_succeed() -> None:
+    """The point: the second attempt is the one that fits — no 502 reaches the learner."""
+    calls: list[httpx.Request] = []
+    truncated = httpx.Response(
+        200,
+        json={
+            "choices": [
+                {"message": {"role": "assistant", "content": ""}, "finish_reason": "length"}
+            ]
+        },
+    )
+    answered = httpx.Response(
+        200,
+        json={
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "Sure, let me check the lift side.",
+                    },
+                    "finish_reason": "stop",
+                }
+            ]
+        },
+    )
+    handler = _counting_handler([truncated, answered], calls)
+
+    provider = provider_with_handler(handler)
+    try:
+        turns = await provider.reply(SCENARIO, [], "Hello?")
+    finally:
+        await provider.aclose()
+
+    assert [turn.content for turn in turns] == ["Sure, let me check the lift side."]
+    assert len(calls) == 2
 
 
 @pytest.mark.asyncio

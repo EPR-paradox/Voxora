@@ -9,7 +9,8 @@ translation, so the request is written once here. Failure mapping is part of the
   ``error.retryable`` is set.
 
 ``retryable`` encodes §13.2: retry what a later moment can fix (empty or unusable output, 5xx, 429,
-transport hiccups) and never retry what only a human can fix (401/403/422, a token budget too small
+transport hiccups, a truncated answer — see the note on `finish_reason` below) and never retry what
+only a human can fix (401/403/422
 for the answer, a request the endpoint refuses). An empty or malformed assistant message is an
 error, never an empty row in a transcript.
 """
@@ -75,13 +76,16 @@ async def post_chat_completion(
         choice = body["choices"][0]
     except (KeyError, IndexError, TypeError) as exc:
         raise error_cls("Model endpoint response is missing the assistant message.") from exc
-    # A truncated answer is a configuration problem (a token budget too small for the model's
-    # reasoning overhead), not a malformed reply: say so rather than hand half a sentence to the
-    # caller, and do not spend a retry on it — the same request would be cut off again.
+    # A truncated answer is the model spending its whole budget on internal reasoning and emitting
+    # nothing, not a malformed reply, so say so instead of handing half a sentence to the caller.
+    #
+    # It is retryable, a reversal measured on 2026-10-02: `deepseek-flash` burned 1627 characters
+    # of reasoning on one call and 0 on the next for the *same* prompt, so a truncation is a
+    # lottery, not a property of the request. At a 400-token budget that was 1 call in 10 (2 in 8
+    # through the API), each reaching the learner as a bare 502 — worse than one extra attempt.
+    # The budget was raised too (AI_MAX_TOKENS): removing a cause beats retrying it.
     if isinstance(choice, dict) and choice.get("finish_reason") == "length":
-        raise error_cls(
-            "Model endpoint hit the token limit before finishing its answer.", retryable=False
-        )
+        raise error_cls("Model endpoint hit the token limit before finishing its answer.")
 
     try:
         content = body["choices"][0]["message"]["content"]

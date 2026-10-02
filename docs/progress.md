@@ -532,3 +532,68 @@ fixed  {bytes,name,type}      → body 104948 B → HTTP 200，转写文字正�
 - 端到端冒烟脚本进仓库（`voxora_e2e.py` / `voxora_eval_e2e.py` 仍只在 scratch）。
 - 仍未定：会议议程进度（走完自动结束 vs 学习者点结束）、AI 之间互相打断的密度。
 
+## 2026-10-02（内容）：出差与生活场景 10 个
+
+用户要「欧美出差、跟工作无关的生活场景」。查下来手机端的分类筛选是 面试 / 职场 / 出差 / 生活，而 DB 里
+（`ck_scenarios_category`）只允许 `interview / workplace / travel / daily_life` —— 后两类**一个场景都没有**。
+
+新增 `app/db/scenario_seeds_life.py`（10 个），按 `seed.py` 原有结构挂进 `SCENARIO_SEEDS`：
+
+```
+travel（出差路上）   airport-immigration-01     入境问询（难度 1）
+                    hotel-checkin-01           入住 + 换房 + 延迟退房（1）
+                    restaurant-ordering-01     过敏点餐 + 上错菜（1）
+                    flight-delay-rebooking-01  航班取消改签 + 行李下落（2）
+                    car-return-dispute-01      还车划痕争议（3）
+daily_life（当地生活）neighbour-small-talk-01    洗衣房闲聊 + 轻微抱怨（1）
+                    pharmacy-consultation-01   药店问诊 + 费用（2）
+                    phone-plan-shop-01         办本地卡 + 拒绝合约（2）
+                    apartment-viewing-01       看房 + 追问条款（3）
+                    urgent-care-visit-01       门诊描述症状 + 复述医嘱（3）
+```
+
+几个刻意的选择：
+
+- **全部单人对话（`cast=None`）**：药店、前台、邻居都是一对一，套会议页面是穿戏服。
+- **`roles` / `companies` 留空**：这些场景不属于某个岗位或雇主，列表页会把这些 chip 渲染出来 —— 在酒店前台旁边
+  挂「KLA/ASML」是噪音。
+- **复用同一份 rubric**（`english-communication-v1`，四维不变）：`professional_tone` 在酒店大堂量的就是「语域
+  与场合是否匹配」，和站会上量的是同一件事；为生活英语另立版本会让两半报告不可比（§8.4）。每个场景各拿一份
+  `_rubric()` 副本，不是十个场景共享一个 dict —— 共享对象的坑只在有人改一处时爆发。
+- **每个场景都带一个真阻力**：排队、上错菜、划痕、推销、抱怨。没有阻力的对话练的是词汇，不是沟通。
+
+测试 234 → 261：新增 `tests/test_scenario_seeds.py`（26 条），逐场景校验分类、难度、字段完整性、目标表达、
+rubric 版本，并单独断言出差/生活组是单人对一、roles/companies 为空、rubric 不共享对象。种子幂等性测试
+（`count == len(SCENARIO_SEEDS)`）自动覆盖新集合。
+
+### 顺手抓到一个真 bug：裸 502
+
+用真 provider 压新场景时，8 次里有 2 次返回 502 `ai_provider_error`。日志只有状态码，所以直接打 provider 本体
+（`roleplay_502_probe.py`，10 次同样请求）：
+
+```
+ok=9  empty=1  of 10     ← 失败那次：finish_reason=length，completion_tokens=400（顶格），
+                            reasoning_chars=1627，content_chars=0
+```
+
+模型把整整 400 token 的预算全烧在**内部推理**上，可见输出为空。而异构的是：同一个 prompt，推理长度在
+**0–1627 字符**之间抽签（后 12 次实测里有 3 次推理为 0）。
+
+根因是我自己的两条设计假设错了：
+
+1. 「`finish_reason=length` 不该重试，重试只会再截断一次」—— 同 prompt 推理长度不稳定，重试常常就过了。
+2. 「`AI_MAX_TOKENS=400` 够用」—— 那是单轮 1.1–2.2 秒的时期测的；现在单轮 2.6–5.6 秒，推理变长，400 顶格即空。
+
+两处都改：预算 400 → **1000**（一轮可见输出只有 50–150 token，多给的额度只在需要时消耗，不生成不计费），
+`finish_reason=length` 改为**可重试一次**。原生 bug 修掉后再测：
+
+```
+max_tokens=1000，同样 12 次：ok=12  empty=0  truncated=0
+新场景 6 个各跑一轮（真 provider）：201 × 6，502 × 0
+```
+
+质量抽查（都在角色里，且都带着设计好的阻力）：入境官问「Two weeks. Where will you be staying?」；房中介主动
+抖出「电费与楼费另算，最短租期正好六个月」；邻居自报门牌后自己提起洗衣机那件事；手机店第二次推两年合约。
+
+规格同步升 Draft v0.13（§8.1 重试清单、§13.2、§11.1 的 `AI_MAX_TOKENS`、§7.8 的 error_code 说明）。
+

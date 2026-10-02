@@ -1,7 +1,7 @@
 # Voxora 软件设计详细规格
 
 > 产品副标题：English for the semiconductor world  
-> 文档状态：Draft v0.12（开发规格草案）  
+> 文档状态：Draft v0.13（开发规格草案）  
 > 日期：2026-10-02  
 > 产品需求来源：`../semispeak.md`  
 > 本文目标：让开发者可据此创建工程、实现数据库/API/核心流程，并编写验收测试。
@@ -632,7 +632,7 @@ review_items(user_id, status, due_at)
 - UI 若请求超时，先 GET session 查看 evaluation 状态，再决定是否 retry，不能盲目创建新 session。
 - 三种结果用同一个响应结构表达，不靠 HTTP 状态码区分：评价成功 → `evaluation_status=completed` + `evaluation`；评价失败 → `evaluation_status=failed` + `error_code` + `retryable=true` + `evaluation=null`；重复调用 → 直接回放已保存的结果。
 - 评价失败**不**用 5xx 表达。会话确实已经结束，把报告的状态放进响应正文，客户端从「首次调用」到「重放」只写一条分支；5xx 会与「会话结束失败」混淆，而后者不可能发生。
-- `error_code` 取值：`ai_provider_timeout`、`invalid_ai_output`（模型输出无法通过 §8.3 校验）、`ai_provider_error`（协议层失败，包含模型返回空内容或答案被 token 上限截断）。
+- `error_code` 取值：`ai_provider_timeout`、`invalid_ai_output`（模型输出无法通过 §8.3 校验）、`ai_provider_error`（协议层失败，包含模型返回空内容或答案被 token 上限截断 —— 两者都会先重试一次，§8.1）。
 - `GET /{id}/evaluation` 复用同一结构：`pending`/`processing` 返回 202，`completed`/`failed` 返回 200，尚无评价返回 404 `evaluation_not_found`。
 
 ### 7.9 获取评价
@@ -751,7 +751,8 @@ Service 层只依赖协议，不直接 import 某供应商 SDK。Provider 实现
 **重试语义（§13.2）**：两个 provider 共用同一套判定，落在共享传输层 `app/ai/openai_compatible_http.py` 的 `ModelEndpointError.retryable` 上：
 
 - 可重试（各重试一次）：空输出或不可用的响应体、5xx、429/408/409/425、传输层错误。
-- 不可重试：401/403/422 等被端点拒绝的请求（同样的请求会被同样拒绝）、`finish_reason=length`（token 预算不足，重试只会再截断一次）。
+- 不可重试：401/403/422 等被端点拒绝的请求（同样的请求会被同样拒绝）、超时（重试只会把等待翻倍）。
+- **可重试：`finish_reason=length`（2026-10-02 修正，原判为不可重试）**。原假设「预算不足，重试只会再截断一次」被实测推翻：deepseek-flash 对**同一个 prompt** 的内部推理长度在 0–1627 字符之间抽签，预算耗尽时可见输出为空。400 token 预算下这是 1/10 的调用（经 API 是 8 次里 2 次），每次都以裸 502 落到学习者面前 —— 比多发一次请求糟。同一时间把预算上调（`AI_MAX_TOKENS` 默认 1000），先消除病因，再用重试兜住长尾。
 - 超时永不重试：一个超时已经花掉一整个窗口，再试一次是把学习者的等待翻倍 —— 由调用方映射为 504，人工重试路径在 §9.2。
 - 重试只在同一轮内发生，不重放用户消息；§9.3 的 `client_message_id` 仍是唯一防重复写入的防线。
 
@@ -1006,7 +1007,7 @@ AI_BASE_URL=https://api.deepseek.com/v1
 AI_API_KEY=
 AI_MODEL=
 AI_TIMEOUT_SECONDS=30
-AI_MAX_TOKENS=400
+AI_MAX_TOKENS=1000
 AI_JSON_MODE=true
 AI_EVALUATION_TIMEOUT_SECONDS=60
 AI_EVALUATION_MAX_TOKENS=4000
@@ -1068,7 +1069,7 @@ ai_provider, ai_model, prompt_version
 
 - DB 超时与 AI 超时分别配置。
 - AI 请求仅对明确可重试的网络错误/限流做有限退避重试；不可对用户消息重复落库。上限一次，且只在同一轮内重试。
-- 可重试集合：空/不可用响应体、5xx、429/408/409/425、传输层错误。不可重试集合：401/403/422 等被端点拒绝的请求、`finish_reason=length`（token 预算不足）、超时。
+- 可重试集合：空/不可用响应体、5xx、429/408/409/425、传输层错误、`finish_reason=length`（理由见 §8.1：同 prompt 的推理长度不稳定，截断是抽签不是请求属性）。不可重试集合：401/403/422 等被端点拒绝的请求、超时。
 - 不对 4xx 输入错误重试。
 - 记录 provider 延迟、错误率、token/cost（若可取得）；MVP 可先只记录请求耗时和 provider/model。
 

@@ -32,7 +32,11 @@ class Settings(BaseSettings):
     ai_api_key: SecretStr | None = None
     ai_model: str = ""
     ai_timeout_seconds: float = 30.0
-    ai_max_tokens: int = 400
+    # One spoken turn is ~50-150 completion tokens, and deepseek-flash spends the rest of the budget
+    # on internal reasoning whose length is wildly unstable (measured: 0 to 1627 characters for
+    # the same prompt). 400 tokens truncated ~1 call in 10 into an empty answer; 1000 leaves room
+    # without costing anything when unused, because tokens never generated are never billed.
+    ai_max_tokens: int = 1000
     ai_json_mode: bool = True
     # A meeting answers with a short script of 1-3 voices in one call, which costs more completion
     # tokens than a single spoken turn; deepseek-flash also spends roughly half of them on reasoning

@@ -6,8 +6,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.core.config import settings
 from app.db.models import Scenario, User
+from app.db.scenario_seeds_life import TRAVEL_AND_LIFE_SEEDS
 from app.scenario_cast import normalize_cast
 
+# Interview and workplace scenarios live here; the travel and daily-life sets are large enough to
+# have their own module (app/db/scenario_seeds_life.py), where the reasoning behind them is written
+# down.
 SCENARIO_SEEDS: list[dict[str, Any]] = [
     {
         "slug": "metrology-project-explanation-01",
@@ -204,6 +208,7 @@ SCENARIO_SEEDS: list[dict[str, Any]] = [
         "status": "published",
         "version": 1,
     },
+    *TRAVEL_AND_LIFE_SEEDS,
 ]
 
 
@@ -214,8 +219,8 @@ async def seed_scenarios(session: AsyncSession) -> None:
         # round trip through the database would only fail later, while a learner waits for a reply.
         values["cast"] = normalize_cast(values.get("cast"))
         if values["cast"] and not values.get("ai_character"):
-            # `ai_character` stays NOT NULL for everything that predates meeting mode; in a
-            # meeting the first participant is the closest thing to "the other person".
+            # `ai_character` stays NOT NULL for everything that predates meeting mode; in a meeting
+            # the first participant is the closest thing to "the other person".
             first = values["cast"][0]
             values["ai_character"] = {"name": first["name"], "title": first["title"]}
 
