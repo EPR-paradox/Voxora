@@ -105,8 +105,12 @@
 - 补上 `GET /api/v1/practice/sessions`（§7.7 **本来就有**这个端点，是后端实现漏了它，不是新增契约）。
   Home 的“继续上次 / 最近练习”现在完全来自服务端，跨设备与重装后都正确；本地那个 session 指针降级为
   调试信息，不再参与任何决策 —— 两处真相源迟早会不一致。9 个测试覆盖排序、筛选、分页、归属与快照标题。
-- **未验证**：Android 模拟器与真机 —— 本机没有 Android SDK / emulator。§1.3 第 6 条的
-  “从 Android Emulator 完成全闭环”要等装了 SDK 或用 Expo Go 真机扫码后才能盖章。
+- 真机准备（走 Expo Go 路线）：后端改绑 `0.0.0.0`、生成 `API_ACCESS_TOKEN` 写进 `backend/.env`、
+  `apps/mobile/.env.local` 写局域网地址与同一个令牌（该文件被 gitignore）、客户端补上 bearer 头
+  —— 少了任何一条，手机上的请求都是 401。本机局域网地址 `192.168.1.6`（enp8s0），Expo 端口 8081。
+  配置步骤写进 README 的 "Running on a physical phone"。
+- **未验证**：Android 模拟器与真机 —— 本机没有 Android SDK / emulator，真机正在装 Expo Go。
+  §1.3 第 6 条的“从 Android Emulator 完成全闭环”要等模拟器或真机跑通后才能盖章。
 
 ### 仓库状态
 

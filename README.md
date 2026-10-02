@@ -61,6 +61,26 @@ because requests from non-loopback clients must carry `Authorization: Bearer <to
 The browser preview is cross-origin, so the backend allows the Expo dev-server origins through
 `CORS_ALLOW_ORIGINS` (local development origins only).
 
+### Running on a physical phone
+
+1. Bind the API to the LAN: `uvicorn app.main:app --host 0.0.0.0 --port 8000`.
+2. Set `API_ACCESS_TOKEN` in `backend/.env`. Loopback clients are exempt from it, a phone is not
+   (§3.1), so without this every request from the device comes back 401.
+3. Put the dev machine's LAN address and the *same* token in `apps/mobile/.env.local`:
+
+   ```dotenv
+   EXPO_PUBLIC_API_BASE_URL=http://192.168.1.6:8000/api/v1
+   EXPO_PUBLIC_API_ACCESS_TOKEN=<same token as the backend>
+   ```
+
+4. `cd apps/mobile && npm start`, then open `exp://<lan-ip>:8081` in Expo Go (or scan the QR code).
+5. If Expo Go hangs, it is usually the host firewall. Allow that subnet only:
+
+   ```bash
+   sudo ufw allow from 192.168.1.0/24 to any port 8081 proto tcp
+   sudo ufw allow from 192.168.1.0/24 to any port 8000 proto tcp
+   ```
+
 ## Debugging in PyCharm
 
 Run configuration type **Python** (not the FastAPI template):
