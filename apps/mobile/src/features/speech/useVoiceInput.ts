@@ -8,7 +8,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { AbortError } from "../../api/client";
 import { describeError } from "../../api/errors";
-import { transcribeClip, type RecordedClip } from "./api";
+import { clipSize, normalizeClipUri, transcribeClip, type RecordedClip } from "./api";
 
 /**
  * The mic on/off toggle from design §10.4, as a hook.
@@ -98,6 +98,7 @@ export function useVoiceInput(onText: (text: string) => void): VoiceInput {
           setFailedClip(null);
         } else {
           // Keep the clip: §10.4 wants "重试" to re-upload the same audio, not a new take.
+          console.warn("[voice] transcription failed", caught);
           setFailedClip(clip);
           setError(describeError(caught));
         }
@@ -128,7 +129,17 @@ export function useVoiceInput(onText: (text: string) => void): VoiceInput {
       setError("没有拿到录音文件，请再试一次。");
       return;
     }
-    await upload({ uri, durationMs: elapsed });
+    const normalized = normalizeClipUri(uri);
+    const size = clipSize(normalized);
+    // Metro prints this in the dev server's log, which is where a phone-only failure has to be diagnosed
+    // from: the phone's own console is not reachable.
+    console.warn(`[voice] clip ${normalized} (${size ?? "unknown"} bytes)`);
+    if (size === 0) {
+      setPhaseBoth("idle");
+      setError("录音文件是空的，再说一次试试。");
+      return;
+    }
+    await upload({ uri: normalized, durationMs: elapsed });
   }, [recorder, setPhaseBoth, status.durationMillis, status.url, upload]);
 
   finishRef.current = finish;
