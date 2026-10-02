@@ -12,6 +12,7 @@ import pytest
 
 from app.ai.openai_compatible import (
     DEFAULT_OPENING_INSTRUCTION,
+    ROLEPLAY_ATTEMPTS,
     OpenAICompatibleRoleplayProvider,
     RoleplayProviderError,
     build_roleplay_provider,
@@ -60,6 +61,7 @@ def provider_with_handler(handler, **overrides) -> OpenAICompatibleRoleplayProvi
         timeout_seconds=settings.ai_timeout_seconds,
         max_tokens=settings.ai_max_tokens,
         max_context_messages=settings.max_context_messages,
+        retry_delay_seconds=0,
         transport=httpx.MockTransport(handler),
     )
 
@@ -230,3 +232,131 @@ async def test_unusable_body_maps_to_provider_error(response: httpx.Response) ->
 
 def _json_body(request: httpx.Request) -> dict:
     return json.loads(request.content)
+
+
+def _counting_handler(responses: list[httpx.Response], calls: list[httpx.Request]):
+    """Answer with the queued responses in order, repeating the last one for extra calls."""
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return responses[min(len(calls) - 1, len(responses) - 1)]
+
+    return handler
+
+
+@pytest.mark.asyncio
+async def test_empty_answer_is_retried_once() -> None:
+    """The measured coin flip: an empty message now, the same request answered a second later."""
+    calls: list[httpx.Request] = []
+    handler = _counting_handler(
+        [completion_response("   "), completion_response("What was the main challenge?")], calls
+    )
+
+    provider = provider_with_handler(handler)
+    try:
+        content = await provider.reply(SCENARIO, [], "I ran the pipeline.")
+    finally:
+        await provider.aclose()
+
+    assert content == "What was the main challenge?"
+    assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_upstream_5xx_is_retried_once() -> None:
+    calls: list[httpx.Request] = []
+    handler = _counting_handler(
+        [
+            httpx.Response(500, text="upstream boom"),
+            completion_response("Got it. What did the sensor noise look like?"),
+        ],
+        calls,
+    )
+
+    provider = provider_with_handler(handler)
+    try:
+        content = await provider.reply(SCENARIO, [], "I ran the pipeline.")
+    finally:
+        await provider.aclose()
+
+    assert content.startswith("Got it.")
+    assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_two_failures_surface_as_provider_error_after_two_calls() -> None:
+    """The retry is an attempt, not a guarantee: a real outage must still reach the caller."""
+    calls: list[httpx.Request] = []
+    handler = _counting_handler([httpx.Response(503, text="down")], calls)
+
+    provider = provider_with_handler(handler)
+    try:
+        with pytest.raises(RoleplayProviderError):
+            await provider.reply(SCENARIO, [], "Hello?")
+    finally:
+        await provider.aclose()
+
+    assert len(calls) == ROLEPLAY_ATTEMPTS
+
+
+@pytest.mark.asyncio
+async def test_rejected_request_is_not_retried() -> None:
+    """§13.2: a request the endpoint refuses is refused again, so do not spend a second call."""
+    calls: list[httpx.Request] = []
+    handler = _counting_handler(
+        [httpx.Response(401, json={"error": {"message": "bad key"}})], calls
+    )
+
+    provider = provider_with_handler(handler)
+    try:
+        with pytest.raises(RoleplayProviderError, match="401"):
+            await provider.reply(SCENARIO, [], "Hello?")
+    finally:
+        await provider.aclose()
+
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_truncated_answer_is_not_retried() -> None:
+    """`finish_reason=length` is a token budget that is too small: the same call truncates again."""
+    calls: list[httpx.Request] = []
+    truncated = httpx.Response(
+        200,
+        json={
+            "choices": [
+                {
+                    "message": {"role": "assistant", "content": "half a sen"},
+                    "finish_reason": "length",
+                }
+            ]
+        },
+    )
+    handler = _counting_handler([truncated], calls)
+
+    provider = provider_with_handler(handler)
+    try:
+        with pytest.raises(RoleplayProviderError, match="token limit"):
+            await provider.reply(SCENARIO, [], "Hello?")
+    finally:
+        await provider.aclose()
+
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_timeout_is_not_retried() -> None:
+    calls: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        raise httpx.ReadTimeout("timed out", request=request)
+
+    provider = provider_with_handler(handler)
+    try:
+        with pytest.raises(TimeoutError):
+            await provider.reply(SCENARIO, [], "Hello?")
+    finally:
+        await provider.aclose()
+
+    assert len(calls) == 1

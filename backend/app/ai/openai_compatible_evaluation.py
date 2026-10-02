@@ -106,9 +106,12 @@ class OpenAICompatibleEvaluationProvider:
         # with an empty message or a half-written report every so often, and the same request
         # succeeds moments later. One immediate retry turns that coin flip into the report the
         # learner is already waiting for; if the second attempt fails too, the failure is real and
-        # belongs to the caller, which reports it with the manual retry path from §9.2.
-        last_error: Exception | None = None
-        for attempt in range(EVALUATION_ATTEMPTS):
+        # belongs to the caller, which reports it with the manual retry path from §9.2. Failures an
+        # attempt cannot fix (a rejected request, a timeout that already cost a full window) are
+        # raised on the spot — §13.2.
+        attempts_left = EVALUATION_ATTEMPTS
+        while True:
+            attempts_left -= 1
             try:
                 raw = await post_chat_completion(
                     self._client,
@@ -118,11 +121,13 @@ class OpenAICompatibleEvaluationProvider:
                     response_format={"type": "json_object"} if self._json_mode else None,
                 )
                 return parse_evaluation_result(raw, learner_turns=learner)
-            except (ModelEndpointError, EvaluationOutputError) as exc:
-                last_error = exc
-                if attempt + 1 < EVALUATION_ATTEMPTS:
-                    await asyncio.sleep(self._retry_delay_seconds)
-        raise last_error
+            except EvaluationOutputError:
+                if attempts_left <= 0:
+                    raise
+            except ModelEndpointError as exc:
+                if attempts_left <= 0 or not exc.retryable:
+                    raise
+            await asyncio.sleep(self._retry_delay_seconds)
 
     async def aclose(self) -> None:
         await self._client.aclose()

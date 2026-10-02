@@ -9,11 +9,16 @@ Design notes:
   the learner is being scored on, otherwise the practice stops being practice.
 - Transport failures are translated into the error contract the practice service already
   understands: ``TimeoutError`` -> HTTP 504, anything else -> HTTP 502.
+- A retryable failure is retried exactly once (§13.2). The model is not deterministic and an empty
+  answer or an upstream 5xx is a coin flip, not a verdict; a timeout is not retried, because it
+  already cost a full window.
 - An empty or malformed assistant message is an error, never an empty row in the transcript.
 - The HTTP call itself is shared with the evaluation provider (``openai_compatible_http``).
 """
 
 from __future__ import annotations
+
+import asyncio
 
 import httpx
 
@@ -21,6 +26,9 @@ from app.ai.openai_compatible_http import ModelEndpointError, post_chat_completi
 from app.core.config import Settings
 
 DEFAULT_OPENING_INSTRUCTION = "Begin the roleplay now with your opening turn."
+
+ROLEPLAY_ATTEMPTS = 2
+ROLEPLAY_RETRY_DELAY_SECONDS = 1.0
 
 
 class RoleplayProviderError(ModelEndpointError):
@@ -62,11 +70,13 @@ class OpenAICompatibleRoleplayProvider:
         timeout_seconds: float,
         max_tokens: int,
         max_context_messages: int,
+        retry_delay_seconds: float = ROLEPLAY_RETRY_DELAY_SECONDS,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self._model = model
         self._max_tokens = max_tokens
         self._max_context_messages = max_context_messages
+        self._retry_delay_seconds = retry_delay_seconds
         headers = {"Content-Type": "application/json"}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
@@ -109,13 +119,29 @@ class OpenAICompatibleRoleplayProvider:
         return messages
 
     async def _post(self, messages: list[dict[str, str]]) -> str:
-        return await post_chat_completion(
-            self._client,
-            model=self._model,
-            messages=messages,
-            max_tokens=self._max_tokens,
-            error_cls=RoleplayProviderError,
-        )
+        """One turn, with the single retry §13.2 allows.
+
+        Measured on deepseek-flash: the endpoint answers with an empty message or a 5xx every so
+        often, and the very same request succeeds moments later. Without this, such a hiccup landed
+        on the learner as a hard 502 in the middle of a conversation. Only failures the transport
+        marked retryable get the second attempt, and a non-retryable one (401/422, a token budget
+        that truncates the answer) fails immediately instead of duplicating the call.
+        """
+        attempts_left = ROLEPLAY_ATTEMPTS
+        while True:
+            attempts_left -= 1
+            try:
+                return await post_chat_completion(
+                    self._client,
+                    model=self._model,
+                    messages=messages,
+                    max_tokens=self._max_tokens,
+                    error_cls=RoleplayProviderError,
+                )
+            except ModelEndpointError as exc:
+                if attempts_left <= 0 or not exc.retryable:
+                    raise
+                await asyncio.sleep(self._retry_delay_seconds)
 
 
 def build_roleplay_provider(settings: Settings):
