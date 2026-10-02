@@ -43,6 +43,14 @@ ROLEPLAY_RETRY_DELAY_SECONDS = 1.0
 
 #: Budget for a meeting script: three voices of 1-2 sentences (docs/meeting-mode-v0.1.md §10).
 MEETING_MAX_TURNS = 3
+#: Sent as the learner's "turn" when nobody has the floor (`advance`): the room keeps moving on its
+#: own agenda instead of asking a question nobody will answer — a listening learner is not a silent
+#: participant, and the model must not write their lines for them.
+ADVANCE_INSTRUCTION = (
+    "The learner is listening and has not taken the floor. Continue the discussion among "
+    "yourselves: move the agenda on, raise your own points and numbers, disagree if you do, and "
+    "assign actions. Do not ask the learner a question this time and never write their lines."
+)
 MEETING_MAX_WORDS_PER_TURN = 60
 
 #: The roster notation from the prompt: `[eng_lead] ...`. Also the shape deepseek-flash falls
@@ -257,6 +265,18 @@ class OpenAICompatibleRoleplayProvider:
         user_message: str,
     ) -> list[RoleplayTurn]:
         return await self._complete(scenario, history, user_message=user_message)
+
+    async def advance(
+        self,
+        scenario: dict[str, Any],
+        history: list[dict[str, str]],
+    ) -> list[RoleplayTurn]:
+        """The room continues without the learner (design §7.14).
+
+        Only a meeting has anyone to continue the discussion: the service refuses a single-character
+        scenario before this is called.
+        """
+        return await self._complete(scenario, history, user_message=ADVANCE_INSTRUCTION)
 
     async def aclose(self) -> None:
         await self._client.aclose()

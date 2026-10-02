@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.ai.roleplay import RoleplayProvider
 from app.core.config import settings
 from app.db.models import Evaluation, Message, PracticeSession, Scenario, User
+from app.scenario_cast import is_meeting
 
 
 @dataclass
@@ -280,6 +281,178 @@ async def send_practice_message(
         await session.flush()
 
     return practice_session, user_message, assistant_messages, False
+
+
+async def advance_meeting(
+    session: AsyncSession,
+    *,
+    session_id: UUID,
+    provider: RoleplayProvider,
+    after_seq: int,
+) -> tuple[PracticeSession, list[Message], int]:
+    """Let the room carry on while the learner only listens (design §7.14).
+
+    Rules that shape this, all of them consequences of decisions already made:
+
+    1. **A new turn index, and never a user row.** The unique key is
+       ``(session_id, turn_index, role, speaker_key)``, so continuing inside the same turn index
+       would collide the moment a participant speaks twice. An advance is therefore its own round
+       with no learner message in it.
+    2. **``turn_count`` does not move.** It tracks the learner's turns, and everything downstream
+       (the finish gate, the report) reads "has this learner spoken?" from their own rows. Advancing
+       is not speaking, so a listening session still ends with nothing to evaluate — which is the
+       honest answer, not a gap to paper over.
+    3. **Bounded by a server-side budget** (:setting:`meeting_max_advances`): silence must not be
+    able to
+       generate an unbounded number of billable turns.
+    4. **``after_seq`` makes it idempotent.** A retried request returns the turns that were already
+       written instead of buying a second round.
+    """
+    async with session.begin():
+        practice_session = await session.scalar(
+            select(PracticeSession).where(PracticeSession.id == session_id).with_for_update()
+        )
+        if practice_session is None:
+            raise PracticeError(404, "resource_not_found", "Practice session not found.")
+        if practice_session.status != "active":
+            raise PracticeError(409, "session_not_active", "This practice session has ended.")
+        if not is_meeting(practice_session.scenario_snapshot):
+            # One person on the other side has nobody to talk to; a monologue is not what was asked
+            # for.
+            raise PracticeError(
+                409, "session_is_not_a_meeting", "Only a meeting can continue without you."
+            )
+
+        pending = await session.scalar(
+            select(Message.id).where(Message.session_id == session_id, Message.status == "pending")
+        )
+        if pending is not None:
+            raise PracticeError(409, "turn_in_progress", "Another turn is still being generated.")
+
+        max_seq = (
+            await session.scalar(
+                select(func.max(Message.seq)).where(Message.session_id == session_id)
+            )
+            or 0
+        )
+        used = await _advance_count(session, session_id)
+        remaining = max(0, settings.meeting_max_advances - used)
+
+        if max_seq > after_seq:
+            # The session already moved past the position the client knows about: hand back what is
+            # there.
+            already = await _assistant_messages_after(session, session_id, after_seq)
+            if already:
+                return practice_session, already, remaining
+
+        if remaining == 0:
+            raise PracticeError(
+                409,
+                "advance_limit_reached",
+                "This meeting has run as long as it allows without you; speak or end it.",
+            )
+
+        turn_index = (
+            await session.scalar(
+                select(func.max(Message.turn_index)).where(Message.session_id == session_id)
+            )
+            or 0
+        ) + 1
+        snapshot = practice_session.scenario_snapshot
+        history_rows = await session.scalars(
+            select(Message)
+            .where(
+                Message.session_id == session_id,
+                Message.status == "completed",
+            )
+            .order_by(Message.turn_index, Message.seq)
+        )
+        history = [
+            {"role": message.role, "speaker_key": message.speaker_key, "content": message.content}
+            for message in history_rows
+        ]
+
+    try:
+        reply_turns = await provider.advance(snapshot, history)
+    except TimeoutError as exc:
+        raise PracticeError(504, "ai_provider_timeout", "The roleplay provider timed out.") from exc
+    except Exception as exc:
+        raise PracticeError(502, "ai_provider_error", "The roleplay provider failed.") from exc
+    if not reply_turns:
+        raise PracticeError(502, "ai_provider_error", "The roleplay provider returned no turns.")
+
+    async with session.begin():
+        practice_session = await session.scalar(
+            select(PracticeSession).where(PracticeSession.id == session_id).with_for_update()
+        )
+        if practice_session is None or practice_session.status != "active":
+            raise PracticeError(409, "session_not_active", "This practice session has ended.")
+        base_seq = await _next_message_seq(session, session_id)
+        assistant_messages = [
+            Message(
+                id=uuid4(),
+                session_id=session_id,
+                turn_index=turn_index,
+                seq=base_seq + offset,
+                role="assistant",
+                speaker_key=turn.speaker_key,
+                content=turn.content,
+                status="completed",
+            )
+            for offset, turn in enumerate(reply_turns)
+        ]
+        session.add_all(assistant_messages)
+        # Deliberately not touching turn_count: that number is the learner's.
+        practice_session.last_activity_at = datetime.now(timezone.utc)
+        await session.flush()
+
+    return practice_session, assistant_messages, remaining - 1
+
+
+async def _advance_count(session: AsyncSession, session_id: UUID) -> int:
+    """Rounds that hold AI turns but no learner turn: derived, never counted in a column.
+
+    A stored counter can drift from the transcript it is supposed to describe; the query cannot.
+
+    Round 0 is excluded on purpose: that is the meeting opening itself, not something the learner
+    chose to listen to. Counting it would silently cost every session one advance from its budget.
+    """
+    assistant_rounds = (
+        select(Message.turn_index)
+        .where(
+            Message.session_id == session_id,
+            Message.role == "assistant",
+            Message.turn_index > 0,
+        )
+        .distinct()
+        .subquery()
+    )
+    learner_rounds = select(Message.turn_index).where(
+        Message.session_id == session_id, Message.role == "user"
+    )
+    return (
+        await session.scalar(
+            select(func.count())
+            .select_from(assistant_rounds)
+            .where(assistant_rounds.c.turn_index.not_in(learner_rounds))
+        )
+        or 0
+    )
+
+
+async def _assistant_messages_after(
+    session: AsyncSession, session_id: UUID, after_seq: int
+) -> list[Message]:
+    rows = await session.scalars(
+        select(Message)
+        .where(
+            Message.session_id == session_id,
+            Message.seq > after_seq,
+            Message.role == "assistant",
+        )
+        .order_by(Message.seq)
+    )
+    return list(rows)
 
 
 async def _assistant_turns(session: AsyncSession, user_message: Message) -> list[Message]:

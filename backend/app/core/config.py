@@ -32,17 +32,25 @@ class Settings(BaseSettings):
     ai_api_key: SecretStr | None = None
     ai_model: str = ""
     ai_timeout_seconds: float = 30.0
-    # One spoken turn is ~50-150 completion tokens, and deepseek-flash spends the rest of the budget
-    # on internal reasoning whose length is wildly unstable (measured: 0 to 1627 characters for
-    # the same prompt). 400 tokens truncated ~1 call in 10 into an empty answer; 1000 leaves room
-    # without costing anything when unused, because tokens never generated are never billed.
-    ai_max_tokens: int = 1000
+    # The visible answer is ~50-150 completion tokens; the rest goes to deepseek-flash's internal
+    # reasoning, whose length is a lottery. Measured on the heaviest prompt (design review, 15):
+    # median 326, max 3039 — 1 call in 15 spends over 1000, and at 400 the answer came back empty
+    # (a bare 502) roughly 1 call in 10. A light scenario (hotel desk, 15 calls) never passed 206.
+    # The cap sits above the observed tail: unused budget is free (tokens never generated are never
+    # billed), while a truncated call costs a retry *and* the latency of both attempts.
+    ai_max_tokens: int = 2000
     ai_json_mode: bool = True
-    # A meeting answers with a short script of 1-3 voices in one call, which costs more completion
-    # tokens than a single spoken turn; deepseek-flash also spends roughly half of them on reasoning
-    # that never reaches the output. Initial value, to be pinned by measurement in Phase 6
-    # (docs/meeting-mode-v0.1.md §5).
-    ai_meeting_max_tokens: int = 1200
+    # A meeting answers with a short script of 1-3 voices as JSON in one call, so it carries the
+    # reasoning of all three plus the scaffolding. Measured 2026-10-02 (12 calls, 3 participants):
+    # median 222, max 1004 — it never hit the old 1200, but that is 84% of the budget while the
+    # single-turn prompts showed a much heavier tail, so there is headroom on top (docs/meeting-mode
+    # §5). A truncation is retried once (§8.1).
+    ai_meeting_max_tokens: int = 1600
+    # How many times a meeting may continue *without* the learner speaking (design §7.14): one
+    # advance is 1-3 spoken turns, so ten covers a five-to-eight-minute meeting. It is a server-side
+    # ceiling, not a client courtesy: an unbounded listening session is an unbounded bill, and
+    # silence without a cap turns practice into a podcast.
+    meeting_max_advances: int = 10
 
     # Evaluation is a separate provider with its own limits (design §8.6): it returns a structured
     # document rather than one spoken turn, so it needs a longer budget and its own timeout.

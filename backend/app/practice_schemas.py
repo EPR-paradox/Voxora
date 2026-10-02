@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from app.core.config import settings
 from app.schemas import ScenarioParticipant
@@ -78,6 +78,28 @@ class SendPracticeMessageResponse(BaseModel):
     # scenario, so the client has one shape to render.
     assistant_messages: list[PracticeMessageResponse]
     session_status: Literal["active"]
+
+
+class AdvanceMeetingRequest(BaseModel):
+    """Continue the meeting without speaking (design §7.14).
+
+    ``after_seq`` is the display position the client has already seen. It makes the call idempotent
+    without a new column: if the session has moved past that position, the turns already written are
+    returned instead of generating and billing a second round (§7.6 has the same concern for
+    messages).
+    """
+
+    after_seq: int = Field(ge=0)
+
+
+class AdvanceMeetingResponse(BaseModel):
+    """What the room said while the learner was listening."""
+
+    assistant_messages: list[PracticeMessageResponse]
+    session_status: Literal["active"]
+    #: How many more times this session may continue without the learner. The client shows it so a
+    #: listening session never ends by surprise.
+    advances_remaining: int
 
 
 class PracticeMessageDetail(PracticeMessageResponse):

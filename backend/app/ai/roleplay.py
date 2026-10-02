@@ -33,6 +33,12 @@ class RoleplayProvider(Protocol):
         user_message: str,
     ) -> list[RoleplayTurn]: ...
 
+    async def advance(
+        self,
+        scenario: dict[str, Any],
+        history: list[dict[str, str]],
+    ) -> list[RoleplayTurn]: ...
+
     async def aclose(self) -> None: ...
 
 
@@ -48,6 +54,7 @@ class FakeRoleplayProvider:
     FOLLOW_UP = "What was the main challenge you had to solve?"
     MEETING_OPENING = "Thanks for joining. We have thirty minutes — shall we start?"
     MEETING_FOLLOW_UP = "Anything you want to add before we move on?"
+    MEETING_ADVANCE = "Let's keep that on the list and look at the numbers first."
 
     async def opening_turns(self, scenario: dict[str, Any]) -> list[RoleplayTurn]:
         return self._turns(scenario, self.OPENING, self.MEETING_OPENING)
@@ -59,6 +66,19 @@ class FakeRoleplayProvider:
         user_message: str,
     ) -> list[RoleplayTurn]:
         return self._turns(scenario, self.FOLLOW_UP, self.MEETING_FOLLOW_UP)
+
+    async def advance(
+        self,
+        scenario: dict[str, Any],
+        history: list[dict[str, str]],
+    ) -> list[RoleplayTurn]:
+        """The room carries on: in a meeting the participants talk to each other, not to nobody.
+
+        A single-character scenario has no one else to talk to, so advancing it is a caller error:
+        the service refuses it long before this is reached, and this path stays honest about that
+        instead of inventing a monologue.
+        """
+        return self._turns(scenario, self.FOLLOW_UP, self.MEETING_ADVANCE)
 
     async def aclose(self) -> None:
         return None

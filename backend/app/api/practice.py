@@ -23,6 +23,8 @@ from app.evaluation_schemas import (
     FinishPracticeSessionRequest,
 )
 from app.practice_schemas import (
+    AdvanceMeetingRequest,
+    AdvanceMeetingResponse,
     CreatePracticeSessionRequest,
     OpeningMessage,
     PracticeMessageDetail,
@@ -40,6 +42,7 @@ from app.scenario_cast import participant_payloads
 from app.services.evaluation import finish_practice_session, get_evaluation, retry_evaluation
 from app.services.practice import (
     PracticeError,
+    advance_meeting,
     create_practice_session,
     get_practice_session,
     list_practice_sessions,
@@ -208,6 +211,45 @@ async def post_message(
             _message_response(message, participants) for message in assistant_messages
         ],
         session_status="active",
+    )
+
+
+@router.post("/{session_id}/advance", response_model=AdvanceMeetingResponse)
+async def post_advance(
+    session_id: UUID,
+    body: AdvanceMeetingRequest,
+    request: Request,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    provider: Annotated[RoleplayProvider, Depends(get_roleplay_provider)],
+) -> AdvanceMeetingResponse | JSONResponse:
+    """Let the meeting continue while the learner listens (design §7.14).
+
+    Not a message endpoint: no learner turn is created, and ``turn_count`` does not move. What the
+    room said is appended as its own round, in one transaction, exactly as a reply to a spoken turn
+    would be.
+    """
+    try:
+        practice_session, assistant_messages, remaining = await advance_meeting(
+            session,
+            session_id=session_id,
+            provider=provider,
+            after_seq=body.after_seq,
+        )
+    except PracticeError as exc:
+        return error_response(
+            request,
+            status_code=exc.status_code,
+            code=exc.code,
+            message=exc.message,
+        )
+
+    participants = _participants(practice_session.scenario_snapshot)
+    return AdvanceMeetingResponse(
+        assistant_messages=[
+            _message_response(message, participants) for message in assistant_messages
+        ],
+        session_status="active",
+        advances_remaining=remaining,
     )
 
 

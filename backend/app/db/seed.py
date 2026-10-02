@@ -7,11 +7,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from app.core.config import settings
 from app.db.models import Scenario, User
 from app.db.scenario_seeds_life import TRAVEL_AND_LIFE_SEEDS
+from app.db.scenario_seeds_tech import TECH_MEETING_SEEDS
 from app.scenario_cast import normalize_cast
 
-# Interview and workplace scenarios live here; the travel and daily-life sets are large enough to
-# have their own module (app/db/scenario_seeds_life.py), where the reasoning behind them is written
-# down.
+# Interview and workplace scenarios live here; the larger sets have their own modules, where the
+# reasoning behind them is written down: app/db/scenario_seeds_life.py (travel and daily life) and
+# app/db/scenario_seeds_tech.py (formal technical meetings).
 SCENARIO_SEEDS: list[dict[str, Any]] = [
     {
         "slug": "metrology-project-explanation-01",
@@ -209,6 +210,7 @@ SCENARIO_SEEDS: list[dict[str, Any]] = [
         "version": 1,
     },
     *TRAVEL_AND_LIFE_SEEDS,
+    *TECH_MEETING_SEEDS,
 ]
 
 

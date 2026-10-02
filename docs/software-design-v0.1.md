@@ -1,7 +1,7 @@
 # Voxora 软件设计详细规格
 
 > 产品副标题：English for the semiconductor world  
-> 文档状态：Draft v0.13（开发规格草案）  
+> 文档状态：Draft v0.15（开发规格草案）  
 > 日期：2026-10-02  
 > 产品需求来源：`../semispeak.md`  
 > 本文目标：让开发者可据此创建工程、实现数据库/API/核心流程，并编写验收测试。
@@ -707,6 +707,8 @@ Content-Type：`multipart/form-data`；字段 `audio_file`（必填）、`langua
 | 409 | session_not_active | session 已结束/放弃 |
 | 409 | turn_in_progress | 同 session 有另一轮正在生成 |
 | 409 | session_has_no_user_turns | 没有可评价的用户发言 |
+| 409 | session_is_not_a_meeting | 单角色场景不能推进（§7.14） |
+| 409 | advance_limit_reached | 本场会议的旁听额度已用尽（§7.14） |
 | 413 | payload_too_large | 文本、请求或音频超限 |
 | 415 | unsupported_media_type | 音频格式不在允许列表内 |
 | 422 | validation_error | 字段校验失败 |
@@ -734,6 +736,32 @@ Content-Type：`multipart/form-data`；字段 `audio_file`（必填）、`langua
 5. 供应商超时 504 `ai_provider_timeout`，上游异常 502 `ai_provider_error`；客户端可重试同一句。
 6. 错误响应（4xx/5xx）是 JSON（§7.12 的统一错误信封），成功响应才是音频。客户端按 `Content-Type` 分流。
 
+### 7.14 会议推进（旁听）
+
+`POST /api/v1/practice/sessions/{session_id}/advance`，请求 `{"after_seq": 12}`。
+
+用于**学习者不发言、只听**的场合（会议草案 §12）：让房间里的人自己把讨论往下推。
+
+响应 200：
+
+```json
+{
+  "assistant_messages": [ { "...": "同 §7.7 的消息结构" } ],
+  "session_status": "active",
+  "advances_remaining": 9
+}
+```
+
+行为约定：
+
+1. **不是消息端点**：不创建用户消息、不动 `turn_count`、不改变会话状态。房间里说的话作为**独立的一轮**写入（`turn_index` 递增），一个事务内落库，`seq` 连续（同 §9.3）。
+2. 单角色场景返回 409 `session_is_not_a_meeting` —— 对面只有一个人，没有「他们继续聊」这回事。
+3. 会话已结束返回 409 `session_not_active`；上一轮还在生成返回 409 `turn_in_progress`；额度用尽返回 409 `advance_limit_reached`。
+4. **`after_seq` 幂等**：它是客户端已看到的最大 `seq`。服务端若已超过该位置，返回已写入的发言而不重新调用模型。这样网络重试不会买到第二份模型调用。
+5. 额度由 `MEETING_MAX_ADVANCES`（默认 10）封顶，服务端强制执行：沉默不产生无限计费。第 0 轮（开场）不计入。
+6. 超时 504 `ai_provider_timeout`，上游异常 502 `ai_provider_error`，均按 §8.1 的规则重试一次。
+7. **没有发言就没有评价**：本端点不会为旁听者生成报告（`finish` 仍按既有规则返回 409 `session_has_no_user_turns`）。这是诚实的答案 —— 没有可评的内容，不编造维度。
+
 ## 8. Roleplay 与 Evaluation AI 设计
 
 ### 8.1 Provider 接口
@@ -752,7 +780,8 @@ Service 层只依赖协议，不直接 import 某供应商 SDK。Provider 实现
 
 - 可重试（各重试一次）：空输出或不可用的响应体、5xx、429/408/409/425、传输层错误。
 - 不可重试：401/403/422 等被端点拒绝的请求（同样的请求会被同样拒绝）、超时（重试只会把等待翻倍）。
-- **可重试：`finish_reason=length`（2026-10-02 修正，原判为不可重试）**。原假设「预算不足，重试只会再截断一次」被实测推翻：deepseek-flash 对**同一个 prompt** 的内部推理长度在 0–1627 字符之间抽签，预算耗尽时可见输出为空。400 token 预算下这是 1/10 的调用（经 API 是 8 次里 2 次），每次都以裸 502 落到学习者面前 —— 比多发一次请求糟。同一时间把预算上调（`AI_MAX_TOKENS` 默认 1000），先消除病因，再用重试兜住长尾。
+- **可重试：`finish_reason=length`（2026-10-02 修正，原判为不可重试）**。原假设「预算不足，重试只会再截断一次」被实测推翻：deepseek-flash 对**同一个 prompt** 的内部推理长度极不稳定，预算耗尽时可见输出为空。400 token 预算下这是 1/10 的调用（经 API 是 8 次里 2 次），每次都以裸 502 落到学习者面前 —— 比多发一次请求糟。
+- **token 预算按实测钉死（2026-10-02）**：可见输出只有 50–150 token，其余全是内部推理，而推理长度是重尾分布。单角色场景（设计评审 prompt，15 次）：中位 326、最大 **3039**，其中 1 次超过 1000；轻场景（酒店前台 15 次）最大 206。会议（3 人 + JSON，12 次）：中位 222、最大 1004，从未触及旧值 1200，但已占 84%。据此 `AI_MAX_TOKENS=2000`、`AI_MEETING_MAX_TOKENS=1600` —— 上限定高不花钱（不生成的 token 不计费），定低则要在尾巴上付「先截断、再重试」的双份延迟。
 - 超时永不重试：一个超时已经花掉一整个窗口，再试一次是把学习者的等待翻倍 —— 由调用方映射为 504，人工重试路径在 §9.2。
 - 重试只在同一轮内发生，不重放用户消息；§9.3 的 `client_message_id` 仍是唯一防重复写入的防线。
 
@@ -1007,7 +1036,9 @@ AI_BASE_URL=https://api.deepseek.com/v1
 AI_API_KEY=
 AI_MODEL=
 AI_TIMEOUT_SECONDS=30
-AI_MAX_TOKENS=1000
+AI_MAX_TOKENS=2000
+AI_MEETING_MAX_TOKENS=1600
+MEETING_MAX_ADVANCES=10
 AI_JSON_MODE=true
 AI_EVALUATION_TIMEOUT_SECONDS=60
 AI_EVALUATION_MAX_TOKENS=4000
