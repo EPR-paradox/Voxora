@@ -69,6 +69,7 @@ def fake_piper(monkeypatch):
     FakePiperVoice.loaded_paths = []
     FakePiperVoice.delay = 0.0
     FakePiperVoice.raises = None
+    FakePiperVoice.seconds = 0.04
     return module
 
 
@@ -161,3 +162,46 @@ async def test_a_model_that_disappears_after_load_is_a_provider_error(fake_piper
 
     with pytest.raises(SpeechSynthesisError, match="is not installed at"):
         await provider.synthesize("Hello", voice="en_US-ryan-medium")
+
+
+async def test_mp3_mode_labels_the_bytes_correctly(fake_piper, tmp_path) -> None:
+    provider = PiperSynthesisProvider(
+        voices_dir=_installed(tmp_path), timeout_seconds=5, mp3_bit_rate=48
+    )
+
+    result = await provider.synthesize("Hello", voice=DEFAULT_VOICE_MODEL)
+
+    assert result.content_type == "audio/mpeg"
+    assert isinstance(result.audio, bytes), "the contract says bytes, not a bytearray"
+    # A real MPEG stream: 11 bits of frame sync, or an ID3 tag in front of it.
+    assert result.audio[:3] == b"ID3" or (
+        result.audio[0] == 0xFF and (result.audio[1] & 0xE0) == 0xE0
+    ), result.audio[:4]
+
+
+async def test_mp3_is_much_smaller_than_the_wav_it_came_from(fake_piper, tmp_path) -> None:
+    """The point of the encoder: the wire is the bottleneck, not the model."""
+    FakePiperVoice.seconds = 0.5
+    voice_dir = _installed(tmp_path)
+    text = "Hello, let us review the overlay residual on the scanner."
+
+    wav = await PiperSynthesisProvider(voices_dir=voice_dir, timeout_seconds=5).synthesize(
+        text, voice=DEFAULT_VOICE_MODEL
+    )
+    mp3 = await PiperSynthesisProvider(
+        voices_dir=voice_dir, timeout_seconds=5, mp3_bit_rate=48
+    ).synthesize(text, voice=DEFAULT_VOICE_MODEL)
+
+    assert wav.content_type == "audio/wav"
+    assert len(mp3.audio) < len(wav.audio) / 2
+
+
+async def test_a_missing_lameenc_is_a_provider_error(fake_piper, tmp_path, monkeypatch) -> None:
+    """A configured bit rate with no encoder must fail loudly, not silently serve WAV."""
+    monkeypatch.setitem(sys.modules, "lameenc", None)
+    provider = PiperSynthesisProvider(
+        voices_dir=_installed(tmp_path), timeout_seconds=5, mp3_bit_rate=48
+    )
+
+    with pytest.raises(SpeechSynthesisError, match="lameenc is not installed"):
+        await provider.synthesize("Hello", voice=DEFAULT_VOICE_MODEL)

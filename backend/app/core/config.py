@@ -96,6 +96,11 @@ class Settings(BaseSettings):
     # the models are downloaded outside the repo (`python -m piper.download_voices <name>`) and the
     # directory is configuration rather than a checked-in path.
     speech_synthesis_piper_dir: str = ""
+    # Piper emits WAV, which does not compress: a 5 s line is ~320 KB — 3-4 s of transfer over a
+    # tunnel from a home uplink, against 0.2 s to synthesise it. Re-encoding to MP3 at this bit rate
+    # cuts that ~7x for ~18 ms of CPU. 0 keeps the raw WAV and needs no lameenc, which is what the
+    # tests use; the client picks its file extension from the content type either way.
+    speech_synthesis_mp3_bit_rate: int = 0
     # Synthesis is the opposite shape of a transcription: a meeting-length line comes back in a few
     # hundred milliseconds, so this budget only has to cover a stalled websocket.
     speech_synthesis_timeout_seconds: float = 30.0

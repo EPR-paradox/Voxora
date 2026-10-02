@@ -48,12 +48,14 @@ class PiperSynthesisProvider:
         voices_dir: Path,
         timeout_seconds: float,
         default_voice: str = DEFAULT_VOICE_MODEL,
+        mp3_bit_rate: int = 0,
     ) -> None:
         self.name = "piper"
         self.model = default_voice
         self._voices_dir = voices_dir
         self._default_voice = default_voice
         self._timeout_seconds = timeout_seconds
+        self._mp3_bit_rate = mp3_bit_rate
         self._voices: dict[str, Any] = {}
         self._load_lock = asyncio.Lock()
 
@@ -61,7 +63,7 @@ class PiperSynthesisProvider:
         model_name = self._model_path(voice).stem
         piper_voice = await self._load(model_name)
         try:
-            audio = await asyncio.wait_for(
+            audio, content_type = await asyncio.wait_for(
                 asyncio.to_thread(self._speak, piper_voice, text),
                 timeout=self._timeout_seconds,
             )
@@ -78,7 +80,7 @@ class PiperSynthesisProvider:
             raise SpeechSynthesisError("The synthesiser returned no audio.")
         return SynthesisResult(
             audio=audio,
-            content_type="audio/wav",
+            content_type=content_type,
             voice=voice,
             provider=self.name,
             model=model_name,
@@ -135,11 +137,50 @@ class PiperSynthesisProvider:
                 f"Could not load the Piper voice {model_name!r}: {exc}"
             ) from exc
 
-    def _speak(self, piper_voice: Any, text: str) -> bytes:
+    def _speak(self, piper_voice: Any, text: str) -> tuple[bytes, str]:
+        """Speak one line and say how to label the bytes.
+
+        Piper emits WAV; MP3 is what fits through a phone's uplink (see ``_wav_to_mp3``).
+        """
         buffer = io.BytesIO()
         with wave.open(buffer, "wb") as handle:
             piper_voice.synthesize_wav(text, handle)
-        return buffer.getvalue()
+        wav_bytes = buffer.getvalue()
+        if not self._mp3_bit_rate:
+            return wav_bytes, "audio/wav"
+        return _wav_to_mp3(wav_bytes, self._mp3_bit_rate), "audio/mpeg"
+
+
+def _wav_to_mp3(wav_bytes: bytes, bit_rate: int) -> bytes:
+    """Re-encode a WAV container as MP3.
+
+    WAV does not compress: a 5 s line is ~320 KB, i.e. 3-4 s of transfer over a tunnel from a home
+    uplink, against 0.2 s to synthesise it — the wire is the bottleneck, not the model. Measured on
+    this machine, 48 kbps mono is ~7x smaller for ~18 ms of CPU.
+
+    ``lameenc`` is imported here rather than at module scope, like every other optional speech
+    dependency: an API that may never speak must not fail to import over it.
+    """
+    try:
+        import lameenc
+    except ImportError as exc:  # pragma: no cover - only in a broken install
+        raise SpeechSynthesisError(
+            "lameenc is not installed but SPEECH_SYNTHESIS_MP3_BIT_RATE is set; install it or set "
+            "the bit rate back to 0."
+        ) from exc
+
+    with wave.open(io.BytesIO(wav_bytes)) as reader:
+        pcm = reader.readframes(reader.getnframes())
+        channels = reader.getnchannels()
+        sample_rate = reader.getframerate()
+
+    encoder = lameenc.Encoder()
+    encoder.set_bit_rate(bit_rate)
+    encoder.set_in_sample_rate(sample_rate)
+    encoder.set_channels(channels)
+    # 2 = high quality, 7 = fastest: the difference is milliseconds, paid once per line.
+    encoder.set_quality(2)
+    return bytes(encoder.encode(pcm) + encoder.flush())
 
 
 def build_piper_provider(settings: Settings) -> PiperSynthesisProvider:
@@ -151,4 +192,5 @@ def build_piper_provider(settings: Settings) -> PiperSynthesisProvider:
     return PiperSynthesisProvider(
         voices_dir=Path(settings.speech_synthesis_piper_dir),
         timeout_seconds=settings.speech_synthesis_timeout_seconds,
+        mp3_bit_rate=settings.speech_synthesis_mp3_bit_rate,
     )

@@ -37,6 +37,11 @@ export AI_TIMEOUT_SECONDS=30
 # SPEECH_DEVICE=cpu is deliberate on this box: the CUDA runtime libraries CTranslate2 wants are
 # ~1.2 GB and the CPU int8 path already runs at 11.6x realtime.
 export SPEECH_PROVIDER=faster_whisper
+# Keep the loader off the network. The weights are already in ~/.cache/huggingface, so a revision
+# check can only add latency — and on this box, behind a fake-ip resolver and a proxy that comes and
+# goes, it can hang outright. Measured: loading small.en is 0.85 s either way, so this is hardening,
+# not the fix for a slow start.
+export HF_HUB_OFFLINE=1
 export SPEECH_MODEL=small.en
 export SPEECH_DEVICE=cpu
 export SPEECH_COMPUTE_TYPE=int8
@@ -47,6 +52,9 @@ export SPEECH_TIMEOUT_SECONDS=180
 export SPEECH_SYNTHESIS_PROVIDER=piper
 export SPEECH_SYNTHESIS_PIPER_DIR="${VOXORA_PIPER_DIR:-${HOME}/piper-voices}"
 export SPEECH_SYNTHESIS_TIMEOUT_SECONDS=30
+# WAV over a phone's uplink is the bottleneck (~320 KB against 0.2 s to synthesise it);
+# 48 kbps mono cuts that ~7x for ~18 ms of CPU. 0 keeps the raw WAV.
+export SPEECH_SYNTHESIS_MP3_BIT_RATE=48
 
 # --- meeting mode (design §7.14) ----------------------------------------------------------------
 # How many times a meeting may continue without the learner speaking.

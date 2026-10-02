@@ -839,11 +839,57 @@ API TTFB              0.15s     （模型已载）/ 0.86–1.02s（首次，含�
    只会让它「看起来能自启」，而 APK 里编译进去的还是旧地址，照样连不上。
    **第 3 条必须等固定域名之后再做。**
 
+### MP3：瓶颈在传输，不在模型
+
+本地合成本来只要 0.08 秒，但一句 5 秒的话是 **319 KB 的 WAV** —— 从家用上行经 tunnel 传出去要 3–4 秒。
+模型不是瓶颈，链路才是。
+
+用 `lameenc`（纯 pip 依赖，不引入系统 ffmpeg）转 MP3。实测 163884 B 的 WAV（3.7 秒）：
+
+```
+ 32 kbps →  15151 B (10.8x 小)   编码 16.7 ms
+ 48 kbps →  22726 B ( 7.2x 小)   编码 18.4 ms   ← 采用
+ 64 kbps →  30302 B ( 5.4x 小)   编码 18.2 ms
+```
+
+同一句话经 tunnel 实测：**319020 B / 4.32s → 16300 B / 1.81s**。
+
+- `SPEECH_SYNTHESIS_MP3_BIT_RATE`（默认 0 = 保持 WAV，测试因此不依赖 lameenc；`run-api.sh` 里设 48）。
+- 客户端不用改：`synthesis.ts` 本来就按 Content-Type 决定扩展名。但它的规则是
+  `includes("wav") ? "wav" : "mp3"` —— **所以任何非 WAV 的响应都必须是 MP3，不能是 Ogg**。
+- `lameenc.encode()` 返回的是 **bytearray**，而 `SynthesisResult.audio` 的类型契约是 `bytes`（测试抓到的）。
+
+### 冷启动的「2 分钟」是我的测量错误，不是 HF 核验
+
+一度以为服务重启后第一次转写要等 2 分钟（有一次 105 秒超时），并把它归因于 `huggingface_hub`
+的在线 revision 检查。**那个归因是错的，写在 commit message 里的也是错的。**
+
+事后单独测量：`WhisperModel("small.en", cpu, int8)` 加载**只要 0.85 秒**，加不加
+`HF_HUB_OFFLINE=1` 分别是 0.85 / 0.91 秒 —— 没有区别。
+
+真实原因是**测量污染**：那次慢测发生在三个 Python 进程同时加载 whisper（每个约 1 GB 常驻）的时候，
+又正好撞上 Mihomo 死亡、DNS 半死。系统空闲时同样的冷启动是 **2.60 秒**（热态 1.45 秒，逐字还原）。
+
+`HF_HUB_OFFLINE=1` 仍保留在 `run-api.sh` 里，但理由变了：权重已在本机缓存，联网核验只可能带来延迟，
+在这台机器（fake-ip DNS + 代理时有时无）上还可能直接挂住。**这是加固，不是性能修复。**
+
+教训：并发跑基准测试时，测出来的数字不是被测对象的速度。
+
+### 公网入口不依赖代理软件
+
+中途 Mihomo 整个退出了（7890/7891 不再监听），tunnel 随即连续 22 次报
+`Failed to dial to edge with quic: timeout`。看上去像「cloudflared 依赖代理」，其实不是：Mihomo 死的时候
+DNS 还在返回它的 fake-ip，cloudflared 拿着 `198.18.x.x` 去连一个已经不存在的 tun。等 Mihomo 完全退出、
+systemd-resolved 恢复正常解析之后，cloudflared 直连就通了（`location=lax13`）—— **公网入口不依赖 Mihomo**。
+
+顺带两条：quick tunnel 重启即换域名（所以中途换过一次地址）；`--edge-ip-version 4` 是必要的，因为
+`region1.v2.argotunnel.com` 的首选记录是 IPv6，而这条宽带跑不通它。
+
 ### 验证
 
 ```
 ruff check / format     干净
-pytest                  281 → 290（test_piper_synthesis.py 8 条 + 工厂 2 条）
+pytest                  281 → 293（test_piper_synthesis.py 8 条 + 工厂 2 条 + MP3 3 条）
 闭环（真 provider）
   本地   3 个音色 → audio/wav → RIFF 合法 → 转写逐字还原
   公网   合成 200 audio/wav 319 KB 4.32s ／ 转写 200 逐字还原 10.2s
