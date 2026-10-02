@@ -1,0 +1,22 @@
+[Unit]
+Description=Cloudflare Tunnel - api.semispeak.com (Voxora API)
+Documentation=file:///home/j/myprojects/Voxora/docs/software-design-v0.1.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# No proxy for this process, deliberately. Routing cloudflared through Mihomo produced
+# `Failed to write the certificate: EOF` during `tunnel login`, and the tunnel reaches Cloudflare's
+# edge directly anyway. The unit runs alongside voxora-api.service; together they are what makes the
+# API reachable from outside the LAN. Ingress and edge-ip-version live in ~/.cloudflared/config.yml.
+UnsetEnvironment=HTTP_PROXY HTTPS_PROXY http_proxy https_proxy ALL_PROXY all_proxy
+ExecStart=/home/j/toolchains/cloudflared --no-autoupdate tunnel run voxora
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
