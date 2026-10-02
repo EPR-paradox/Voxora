@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FlatList,
   KeyboardAvoidingView,
@@ -19,6 +19,7 @@ import { newClientMessageId } from "../../src/api/client";
 import { ApiError, describeError } from "../../src/api/errors";
 import { finishSession } from "../../src/features/evaluation/api";
 import { getSession, sendMessage } from "../../src/features/practice/api";
+import { useSpeechOutput, type SpeechLine } from "../../src/features/speech/useSpeechOutput";
 import { formatDuration, useVoiceInput } from "../../src/features/speech/useVoiceInput";
 import { colors, radius, spacing, speakerColor, typography } from "../../src/theme";
 
@@ -104,6 +105,7 @@ export default function PracticeScreen() {
 
   const messages = sessionQuery.data?.messages ?? [];
   const session = sessionQuery.data;
+  const participants = useMemo(() => session?.participants ?? [], [session]);
   // Meeting mode: more than one participant in the room (§7.7). Read here because the voice callback
   // below needs it, and the screens' early returns come later.
   const inMeeting = (session?.participants.length ?? 0) > 1;
@@ -159,6 +161,48 @@ export default function PracticeScreen() {
     ),
   );
 
+  // Voice output (meeting-mode §9). Every participant speaks with the voice the server picked for them,
+  // so the client never keeps its own copy of the catalog.
+  const speech = useSpeechOutput();
+  const voiceByKey = useMemo(() => {
+    const map = new Map<string, string | null>();
+    for (const participant of participants) map.set(participant.key, participant.voice ?? null);
+    return map;
+  }, [participants]);
+
+  const asSpeechLine = useCallback(
+    (message: { id: string; speaker_key: string; content: string }): SpeechLine => ({
+      id: message.id,
+      text: message.content,
+      voice: voiceByKey.get(message.speaker_key) ?? null,
+    }),
+    [voiceByKey],
+  );
+
+  // Speak the AI's lines as they arrive — but never the backlog. Entering a session with ten turns of
+  // history must not start a monologue; the first pass only marks what is already there as heard.
+  const spokenRef = useRef<Set<string>>(new Set());
+  const seededRef = useRef(false);
+  useEffect(() => {
+    const assistant = messages.filter((message) => message.role === "assistant");
+    if (!seededRef.current) {
+      seededRef.current = true;
+      for (const message of assistant) spokenRef.current.add(message.id);
+      return;
+    }
+    const fresh = assistant.filter((message) => !spokenRef.current.has(message.id));
+    if (fresh.length === 0) return;
+    for (const message of fresh) spokenRef.current.add(message.id);
+    speech.speak(fresh.map(asSpeechLine));
+  }, [asSpeechLine, messages, speech]);
+
+  // Opening the mic stops playback (§9.2): otherwise the learner records the AI's voice into their turn.
+  const stopSpeechRef = useRef(speech.stop);
+  stopSpeechRef.current = speech.stop;
+  useEffect(() => {
+    if (voice.phase !== "idle") stopSpeechRef.current();
+  }, [voice.phase]);
+
   if (sessionQuery.isPending) {
     return (
       <View style={styles.root}>
@@ -182,18 +226,31 @@ export default function PracticeScreen() {
       <Stack.Screen
         options={{
           title: session.scenario.title,
-          headerRight: () =>
-            finished ? null : (
+          headerRight: () => (
+            <View style={styles.headerActions}>
               <Pressable
-                disabled={!canFinish}
-                onPress={() => finish.mutate()}
+                accessibilityRole="button"
+                accessibilityLabel={speech.muted ? "打开语音播放" : "静音"}
+                onPress={() => speech.setMuted(!speech.muted)}
                 style={({ pressed }) => [pressed && styles.pressed]}
               >
-                <Text style={[styles.headerAction, !canFinish && styles.headerActionDisabled]}>
-                  {finish.isPending ? "生成中…" : "结束"}
+                <Text style={[styles.headerAction, speech.muted && styles.headerActionDisabled]}>
+                  {speech.muted ? "静音" : "有声"}
                 </Text>
               </Pressable>
-            ),
+              {finished ? null : (
+                <Pressable
+                  disabled={!canFinish}
+                  onPress={() => finish.mutate()}
+                  style={({ pressed }) => [pressed && styles.pressed]}
+                >
+                  <Text style={[styles.headerAction, !canFinish && styles.headerActionDisabled]}>
+                    {finish.isPending ? "生成中…" : "结束"}
+                  </Text>
+                </Pressable>
+              )}
+            </View>
+          ),
         }}
       />
 
@@ -233,6 +290,27 @@ export default function PracticeScreen() {
               <Text style={styles.bubbleLabel}>{item.speakerName ?? session.scenario.title}</Text>
             ) : null}
             <Text style={styles.bubbleText}>{item.content}</Text>
+            {item.role === "assistant" && !item.pending && !item.failed ? (
+              <View style={styles.speakRow}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={speech.playingId === item.key ? "停止播放" : "朗读这一句"}
+                  onPress={() => {
+                    if (speech.playingId === item.key) {
+                      speech.stop();
+                      return;
+                    }
+                    const message = messages.find((entry) => entry.id === item.key);
+                    if (message) speech.replay(asSpeechLine(message));
+                  }}
+                  style={({ pressed }) => [pressed && styles.pressed]}
+                >
+                  <Text style={styles.speakLabel}>
+                    {speech.playingId === item.key ? "停止" : "朗读"}
+                  </Text>
+                </Pressable>
+              </View>
+            ) : null}
             {item.pending ? <Text style={styles.bubbleStatus}>发送中…</Text> : null}
             {item.failed ? (
               <View style={styles.retryRow}>
@@ -249,6 +327,8 @@ export default function PracticeScreen() {
       {send.isError && !outbox.some((item) => item.failed) ? (
         <Text style={styles.error}>{describeError(send.error)}</Text>
       ) : null}
+
+      {speech.error ? <Text style={styles.error}>朗读失败：{speech.error}</Text> : null}
 
       {finished ? (
         <View style={styles.footerBar}>
@@ -440,6 +520,9 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.sm,
   },
   linkLabel: { ...typography.caption, color: colors.accent, fontWeight: "700" },
+  headerActions: { flexDirection: "row", alignItems: "center", gap: spacing.lg },
+  speakRow: { flexDirection: "row", alignItems: "center", gap: spacing.md },
+  speakLabel: { ...typography.caption, color: colors.accent, fontWeight: "700" },
   headerAction: { color: colors.accent, fontSize: 15, fontWeight: "600" },
   headerActionDisabled: { color: colors.textMuted },
   pressed: { opacity: 0.7 },

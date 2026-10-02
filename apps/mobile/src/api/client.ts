@@ -139,17 +139,27 @@ async function unwrap<T>(response: Response): Promise<T> {
   const payload: unknown = raw ? safeJsonParse(raw) : null;
 
   if (!response.ok) {
-    const envelope = (payload as { error?: ApiErrorBody } | null)?.error;
-    throw new ApiError({
-      status: response.status,
-      code: envelope?.code ?? "unknown_error",
-      message: envelope?.message ?? `HTTP ${response.status}`,
-      requestId: envelope?.request_id ?? response.headers.get("X-Request-ID"),
-      details: envelope?.details,
-    });
+    throw apiErrorFrom(response, payload);
   }
 
   return payload as T;
+}
+
+/** Read the error envelope out of a failed response. The body is consumed, so this is once per call. */
+async function raiseApiError(response: Response): Promise<never> {
+  const raw = await response.text();
+  throw apiErrorFrom(response, raw ? safeJsonParse(raw) : null);
+}
+
+function apiErrorFrom(response: Response, payload: unknown): ApiError {
+  const envelope = (payload as { error?: ApiErrorBody } | null)?.error;
+  return new ApiError({
+    status: response.status,
+    code: envelope?.code ?? "unknown_error",
+    message: envelope?.message ?? `HTTP ${response.status}`,
+    requestId: envelope?.request_id ?? response.headers.get("X-Request-ID"),
+    details: envelope?.details,
+  });
 }
 
 function buildUploadHeaders(): Record<string, string> | undefined {
@@ -169,6 +179,44 @@ function safeJsonParse(raw: string): unknown {
   } catch {
     return null;
   }
+}
+
+/**
+ * A synthesised line comes back as audio, not as json (§7.13). It is one request per line and the
+ * server answers in a second or two; the leash only has to outlive the server's own 30 s budget.
+ */
+export const SYNTHESIS_TIMEOUT_MS = 60_000;
+
+/**
+ * Binary response (voice output, §7.13). Success is audio bytes; a failure is still the §7.12 json
+ * envelope, which is why the error path is the same one `apiRequest` uses — the screen branches on
+ * `ApiError.code`, not on the response shape.
+ */
+export async function apiBinary(
+  path: string,
+  options: { body?: unknown; timeoutMs?: number; signal?: AbortSignal } = {},
+): Promise<{ bytes: Uint8Array; contentType: string }> {
+  const { body, timeoutMs = SYNTHESIS_TIMEOUT_MS, signal } = options;
+
+  const response = await withTimeout(
+    timeoutMs,
+    (requestSignal) =>
+      fetch(`${API_BASE_URL}${path}`, {
+        method: "POST",
+        headers: buildHeaders(body),
+        body: body === undefined ? undefined : JSON.stringify(body),
+        signal: requestSignal,
+      }),
+    signal,
+  );
+  if (!response.ok) {
+    await raiseApiError(response);
+  }
+  const buffer = await response.arrayBuffer();
+  return {
+    bytes: new Uint8Array(buffer),
+    contentType: response.headers.get("Content-Type") ?? "application/octet-stream",
+  };
 }
 
 /**

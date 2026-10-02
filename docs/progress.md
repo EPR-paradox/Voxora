@@ -408,3 +408,30 @@ en-IN-NeerjaExpressiveNeural    200 audio/mpeg no-store  41904 B  1.7s
 
 - 6.6c：客户端播放队列、「按麦克风即停播」、发言气泡上的播放按钮。
 - 真机验收：合成语音在 Expo Go 里的播放（web 渲染过不等于 native 过）。
+
+## 2026-10-02（语音输出 6.6c）：让它真的开口
+
+客户端播放链路，`apps/mobile`：
+
+- `src/api/client.ts`：新增 `apiBinary`（成功是音频字节，失败仍是 §7.12 的 JSON 信封 —— 错误路径与 `apiRequest`
+  共用，屏幕只按 `ApiError.code` 分支）；超时 `SYNTHESIS_TIMEOUT_MS=60s`（要长过服务端 30s）。
+- `src/features/speech/synthesis.ts`：把响应字节写进 `Paths.cache` 里的临时文件再交给播放器。**扩展名跟随
+  Content-Type**（mock 返回 WAV，硬写成 .mp3 播放器可能拒绝）；播完即删，服务端本来就没留副本。
+- `src/features/speech/useSpeechOutput.ts`：队列 + 播放状态机。一条一条播（三个人同时说话是噪音）；开麦即
+  `stop()`（扬声器还在响就开麦，学习者会把 AI 的声音录进自己这轮）；一行读不出来只提示不阻塞队列（语音是增强
+  项）；`stop()` 会 resolve 掉正在等的「播完」promise，避免队列卡死；卸载时释放播放器与临时文件。
+- 对话页：新到的 AI 发言自动入队播放（**首次加载只标记为已听过，不朗读历史**，否则进一个十轮会话手机会先独白
+  一分钟）；标题栏加「有声/静音」（静音只拦自动播放，手动朗读仍生效 —— 手动意图高于开关）；每条 AI 气泡上有
+  「朗读/停止」；`participants[].voice` 决定用哪个音色，客户端不保存音色目录副本。
+- 规格：主规格升 Draft v0.12，新增 §10.5（音频不缓存、开麦停播、路由 `playsInSilentMode` + `duckOthers`、
+  不做语速/音色选择/离线留存）。会议草案 §11 的 6.6 行标为完成（真机待确认）。
+
+### 验证
+
+- `tsc --noEmit` 干净。
+- `npx expo export --platform android` 成功（3.0 MB `.hbc`），在产物里逐个确认新代码存在：
+  `/practice/speech/synthesis`、`voxora-line-`、`expo-file-system`、`duckOthers` 各命中；中文按 utf-16-le 计数
+  （朗读 2、有声 1、静音 1、朗读失败 1）。web 渲染过不等于 native 过，所以这一步是必须的。
+- Metro 已用 `--clear` 重启（pid 在 8081），手机侧需要硬重载（从最近任务划掉再开，切前后台不算）。
+- 真机验收待做：播放是否出声、开麦是否真的停播、临时文件是否被清掉。
+

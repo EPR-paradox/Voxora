@@ -76,6 +76,11 @@ export interface ScenarioParticipant {
   key: string;
   name: string;
   title: string;
+  /**
+   * Which voice this participant speaks with (meeting-mode §9). Comes from the server so the client
+   * never keeps its own copy of the voice catalog; null only if an older payload omits it.
+   */
+  voice?: string | null;
 }
 
 export interface PracticeMessage {
