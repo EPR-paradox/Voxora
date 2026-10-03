@@ -1,7 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { ApiError, describeError } from "../../api/errors";
+import { ApiError, NetworkError, describeError } from "../../api/errors";
 import { advanceMeeting } from "./api";
 
 /**
@@ -28,6 +28,9 @@ const SETTLE_MS = 700;
 const AUDIO_POLL_MS = 400;
 /** With no audio at all (muted, or nothing to say) the meeting still needs a beat between rounds. */
 const PAUSE_BETWEEN_ROUNDS_MS = 900;
+/** One more go after an upstream failure: measured, an advance ends in a 502 about 1 round in 8. */
+const MAX_TRANSIENT_RETRIES = 1;
+const TRANSIENT_RETRY_MS = 2000;
 
 export interface MeetingListening {
   listening: boolean;
@@ -57,6 +60,11 @@ export function useMeetingListening(params: {
   const listeningRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inFlightRef = useRef(false);
+  const transientRetriesRef = useRef(0);
+  // `enabled` follows the session's status, so it is false the moment the session ends — read through a
+  // ref, because the catch block of an in-flight request must see the value now, not the one it closed over.
+  const enabledRef = useRef(enabled);
+  enabledRef.current = enabled;
   // The two halves of the loop call each other; refs keep each from depending on the other's identity.
   const stepRef = useRef<() => void>(() => undefined);
   const afterRoundRef = useRef<() => void>(() => undefined);
@@ -82,6 +90,7 @@ export function useMeetingListening(params: {
     inFlightRef.current = true;
     try {
       const response = await advanceMeeting(sessionId, getCursor());
+      transientRetriesRef.current = 0;
       setAdvancesRemaining(response.advances_remaining);
       // Refetch rather than appending locally: the transcript is server state (§10.2), and the refetch is also
       // what gives the next round its cursor and feeds the auto-play effect.
@@ -94,6 +103,19 @@ export function useMeetingListening(params: {
       }
       timerRef.current = setTimeout(() => afterRoundRef.current(), SETTLE_MS);
     } catch (caught) {
+      // The session ended while this round was in flight — the learner pressed 结束. That is not a failure
+      // to report: the room is closed, and the error would surface right on top of their own tap.
+      if (!enabledRef.current) return;
+      // A 502/504 is the model being unlucky (§13.2), and the server has already spent its own second
+      // attempt on it. `after_seq` makes a client-side retry free: it hands back rounds already written, or
+      // buys one new one. One more go turns "1 round in 8 dies" into "you almost never see it".
+      const transient =
+        (caught instanceof ApiError && caught.status >= 500) || caught instanceof NetworkError;
+      if (transient && transientRetriesRef.current < MAX_TRANSIENT_RETRIES && listeningRef.current) {
+        transientRetriesRef.current += 1;
+        timerRef.current = setTimeout(() => stepRef.current(), TRANSIENT_RETRY_MS);
+        return;
+      }
       stop();
       if (caught instanceof ApiError && caught.code === "advance_limit_reached") {
         setError("你已经在旁边听很久了：说一句，或者结束这场会议。");

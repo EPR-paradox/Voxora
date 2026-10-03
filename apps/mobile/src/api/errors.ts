@@ -75,6 +75,16 @@ export function describeError(error: unknown): string {
         return "这次练习还没有生成评价。";
       case "evaluation_in_progress":
         return "评价正在生成中。";
+      // A 502/504 is upstream, not the learner's mistake: say what happened and that trying again is
+      // the right move, instead of echoing "The roleplay provider failed." — which is what the
+      // interface used to say, in English.
+      case "ai_provider_error":
+        return "模型这次没给出可用的回复，再试一次通常就好。";
+      case "ai_provider_timeout":
+        return "模型响应太慢了，稍等一下再试。";
+      case "speech_provider_error":
+      case "speech_synthesis_error":
+        return "语音服务这次没成功，重试一次。";
       case "resource_not_found":
         return "找不到这个资源。";
       case "service_unavailable":

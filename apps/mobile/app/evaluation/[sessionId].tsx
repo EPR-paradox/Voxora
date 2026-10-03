@@ -130,13 +130,24 @@ export default function EvaluationScreen() {
   }
 
   if (missingEvaluation) {
+    // No evaluation row at all means one of two things, and neither is fixed by asking the server to
+    // finish again: an abandoned session — the ending reserved for a learner who only listened, which
+    // refuses to run once they have spoken (§7.15) — or a session whose report never got written. This
+    // branch used to offer 「生成反馈」, which answered 409 session_not_active forever.
     return (
       <Screen>
-        <EmptyState title="这次练习还没有反馈" hint="结束练习后就会生成。" />
+        <EmptyState
+          title={session.turn_count === 0 ? "这次只旁听，没有可评价的发言" : "这次练习没有反馈"}
+          hint={
+            session.turn_count === 0
+              ? "旁听不算发言，所以不会生成评价。想让 AI 评一评，下次开麦或打字说一句就行。"
+              : "这场练习没有留下评价记录，重新开始一场吧。"
+          }
+        />
         <AppButton
-          label={finish.isPending ? "正在生成反馈，约 15 秒…" : "生成反馈"}
-          busy={finish.isPending}
-          onPress={() => finish.mutate()}
+          label="回到首页"
+          variant="secondary"
+          onPress={() => router.push("/")}
           style={styles.action}
         />
       </Screen>
