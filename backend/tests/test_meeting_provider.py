@@ -90,7 +90,17 @@ def test_meeting_prompt_states_the_output_contract() -> None:
 
     assert '"turns"' in prompt
     assert "speaker" in prompt
-    assert str(MEETING_MAX_TURNS) in prompt
+    assert "at most once in a round" in prompt
+
+
+def test_the_round_cap_never_asks_for_more_speakers_than_the_room_has() -> None:
+    """A 2-person room told "1 to 3 turns" repeats a speaker by pigeonhole, and the schema keeps
+    one row per participant per round. The cap has to follow the cast."""
+    prompt = build_meeting_system_prompt(MEETING_SCENARIO)
+    cast_size = len(MEETING_SCENARIO["cast"])
+
+    assert cast_size < MEETING_MAX_TURNS, "this test is only meaningful for a small room"
+    assert f"1 to {cast_size} turns" in prompt
 
 
 def test_parse_accepts_a_valid_script() -> None:
@@ -128,14 +138,22 @@ def test_a_prose_script_is_accepted() -> None:
     assert turns[1].content.endswith("buys the same days?")
 
 
-def test_a_speaker_returning_inside_one_turn_is_rejected() -> None:
-    """eng_lead, pm, eng_lead cannot be stored as one turn; a retry is cheaper than a 500."""
+def test_a_speaker_returning_inside_one_turn_is_merged() -> None:
+    """eng_lead, pm, eng_lead is one row per participant (§9.3): the returning line joins their row.
+
+    Rejecting this was the bug, not caution: a two-person room asked for up to three turns repeats a
+    speaker by pigeonhole, so these scripts reached the learner as 502s.
+    """
     raw = script(
         ("eng_lead", "First point."), ("pm", "A question."), ("eng_lead", "And another thing.")
     )
 
-    with pytest.raises(RoleplayOutputError, match="speaks twice in one turn"):
-        parse_meeting_turns(raw, cast_keys=CAST_KEYS)
+    turns = parse_meeting_turns(raw, cast_keys=CAST_KEYS)
+
+    assert [(turn.speaker_key, turn.content) for turn in turns] == [
+        ("eng_lead", "First point. And another thing."),
+        ("pm", "A question."),
+    ]
 
 
 def test_a_fenced_json_script_is_accepted() -> None:

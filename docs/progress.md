@@ -1035,4 +1035,54 @@ Gradle 9.3.1      /home/j/toolchains/gradle-9.3.1-bin.zip（腾讯镜像 137 MB�
   合并成一次构建，省掉一次 45 分钟起的排队。
 - 主题强调色仍是蓝 `#4f8cff`（`src/theme/index.ts`），与紫色图标不同源，待定。
 
+## 2026-10-03（修 bug）：旁听推进 502（一个房间装不下的剧本）
+
+### 症状
+
+用户点「结束」时看到 502。日志里真相是两件事叠在一起：
+
+- `POST /advance`（旁听推进）502 —— 13:43:56 一次、13:45:26 一次；
+- `POST /finish` 409 两次 —— 那场只旁听没发言，`finish` 按设计拒绝（`session_has_no_user_turns`）。
+
+### 根因：不是模型抽风，是校验器和 prompt 互相打架
+
+`_validate_turns` 原来拒绝「同一个人在一轮里说两次」（因为 `(session_id, turn_index, role,
+speaker_key)` 唯一，同一轮同一人两行插不进去）。同时会议 prompt 邀请模型「1 to 3 turns」。
+**2 人房间里要 3 条发言，由抽屉原理必然有人重复**，于是这类剧本 100% 被拒、重试一次再被拒、
+最后以 502 落到学习者脸上。
+
+实测（真实 DeepSeek，`standup-blocker-01`，2 人）：**23 次推进里 7 次 502（30%）**，失败样本里
+模型给出的都是完全合规的 JSON，只是同一个人在一轮里出现两次。另外 17 次请求里有 1 次是真空回答
+（`finish_reason=stop`、`content` 为空、`reasoning_content` 1282 字），量级小得多。
+
+### 修法
+
+1. **`_validate_turns`：重复发言合并进本人那一行**，而不是拒绝。首次出现决定顺序，回来那句追加到
+   自己的发言后面。每行词数上限仍按「合并不前」的单行判断（上限的用意是防止一人念长稿）。
+2. **prompt 的轮次上限跟房间人数走**：`min(MEETING_MAX_TURNS, len(cast))`，2 人房间就是「1 to 2
+   turns」；并新增一条「Each participant speaks at most once in a round」。
+3. **502 现在有日志了**：`_with_retry` 放弃时打 `logger.warning`（含尝试次数、retryable、原因）。
+   在此之前服务端只留一条 `502 Bad Gateway` 访问日志，原因是查不出来的。
+4. **客户端不再把 502 直接拍给学习者**（`useMeetingListening`）：5xx/网络错误先自己重试一次
+   （`after_seq` 让重试近乎免费 —— 要么拿回已写好的轮次，要么只多买一轮），并且会话已结束时
+   不再报错（那轮请求是在他按「结束」之前发出去的，报错正好压在他自己那一下上面）。
+5. **反馈页的死胡同**：`missingEvaluation`（没有评价行）分支原来给一个「生成反馈」按钮，对已 abandon
+   的会话永远 409 —— 换成了说明文案 + 返回首页。
+6. `describeError` 补 `ai_provider_error` / `ai_provider_timeout` 的中文，之前 502 显示的是英文原文
+   "The roleplay provider failed."。
+
+### 验证
+
+- 修前：23 次推进 7 次失败；修后同一探针 **8 轮 0 失败**（第 6 轮内部重试一次，即那次空回答）。
+- 真实 HTTP 端到端（跑在 systemd 里的那个 API）：3 轮推进全 200、额度 9/8/7 递减、
+  陈旧 cursor 重放拿回的 6 条与服务端已写 6 条 id 完全一致（重试免费的性质没被破坏）、abandon 200。
+- `ruff check` + `ruff format --check` 干净；`pytest` 294 passed（改了 2 条断言：重复发言由「被拒」
+  改为「被合并」，prompt 断言改为跟随人数）。
+- 探针留在 `~/.hermes/cache/scratch/meeting_advance_probe.py`（在 provider 层拦 HTTP 响应，打印
+  `finish_reason` / usage / reasoning 长度）与 `advance_e2e.py`（跑在真实 API 上）。
+
+### 还没做
+
+- 客户端这两处修复要跟着下一次构建才上手机（当前构建正在进行，含图标 + 文案 + arm64）。
+
 

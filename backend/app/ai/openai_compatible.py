@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar
@@ -40,6 +41,8 @@ MEETING_OPENING_INSTRUCTION = "Begin the meeting now with the participants' firs
 
 ROLEPLAY_ATTEMPTS = 2
 ROLEPLAY_RETRY_DELAY_SECONDS = 1.0
+
+logger = logging.getLogger(__name__)
 
 #: Budget for a meeting script: three voices of 1-2 sentences (docs/meeting-mode-v0.1.md §10).
 MEETING_MAX_TURNS = 3
@@ -104,6 +107,10 @@ def build_meeting_system_prompt(scenario: dict) -> str:
     passed as data, so nothing they type can rewrite the rules.
     """
     roster = "\n".join(_roster_line(participant) for participant in scenario_cast(scenario))
+    # Never invite more turns than the room has people: a 2-person room asked for "1 to 3 turns"
+    # repeats a speaker by pigeonhole, and the schema stores one row per participant per round
+    # (§9.3). The count used to be the flat cap, which is what made those scripts fail.
+    max_turns = min(MEETING_MAX_TURNS, len(scenario_cast(scenario)))
     situation = (scenario.get("situation") or "").strip()
     objective = (scenario.get("user_objective") or "").strip()
     instructions = (scenario.get("roleplay_instructions") or "").strip() or (
@@ -120,15 +127,17 @@ def build_meeting_system_prompt(scenario: dict) -> str:
         "- Only the people listed above speak. Never add a participant, never write the learner's "
         "lines, never answer on the learner's behalf.\n"
         f'- Answer with one json object and nothing else: {{"turns": [{{"speaker": "<key>", '
-        f'"content": "..."}}]}}, 1 to {MEETING_MAX_TURNS} turns. No prose, no [speaker] lines, no '
+        f'"content": "..."}}]}}, 1 to {max_turns} turns. No prose, no [speaker] lines, no '
         "markdown fences.\n"
         "- `speaker` must be one of the bracketed keys above; `content` is one or two sentences "
         "of spoken English.\n"
+        "- Each participant speaks at most once in a round: if someone has more to say, put it "
+        "all in their one turn.\n"
         f"- At most {MEETING_MAX_WORDS_PER_TURN} words per turn; no narration, "
         "no stage directions.\n"
         "- The participants may answer each other, disagree or cut in, and silent participants are "
         "fine.\n"
-        "- A round is one to three of them, never the whole room: speak if you have a reason, and "
+        f"- A round is 1 to {max_turns} of them: speak if you have a reason, and "
         "prefer people who have not spoken recently. Do not let the same two voices carry every "
         "round.\n"
         "- Prefer ending on a question or an invitation so the learner can take the floor.\n"
@@ -199,6 +208,8 @@ def _validate_turns(turns: list, *, cast_keys: set[str]) -> list[RoleplayTurn]:
         )
 
     parsed: list[RoleplayTurn] = []
+    # speaker -> their row in `parsed`, so a participant who speaks again joins their own row.
+    positions: dict[str, int] = {}
     for item in turns:
         if not isinstance(item, dict):
             raise RoleplayOutputError("Every turn must be an object with a speaker and content.")
@@ -211,21 +222,26 @@ def _validate_turns(turns: list, *, cast_keys: set[str]) -> list[RoleplayTurn]:
         if not content:
             raise RoleplayOutputError("A turn came back empty.")
 
-        if parsed and parsed[-1].speaker_key == speaker:
-            # The same person carrying on: one row in the transcript, so merge it. Without this the
-            # insert would hit the per-turn uniqueness rule and surface as a 500.
-            content = f"{parsed.pop().content} {content}"
-        elif any(turn.speaker_key == speaker for turn in parsed):
-            # Someone speaking, leaving, and coming back inside one turn cannot be expressed by the
-            # schema; a retry is cheap and this shape is rare.
-            raise RoleplayOutputError(f"{speaker!r} speaks twice in one turn.")
-
+        # The cap is per line, before any merge: it exists so one voice cannot deliver a monologue.
         words = len(content.split())
         if words > MEETING_MAX_WORDS_PER_TURN:
             raise RoleplayOutputError(
                 f"A turn ran to {words} words, the cap is {MEETING_MAX_WORDS_PER_TURN}."
             )
-        parsed.append(RoleplayTurn(speaker_key=speaker, content=content))
+
+        index = positions.get(speaker)
+        if index is None:
+            # First appearance defines the row; the order of first appearances is the round's order.
+            positions[speaker] = len(parsed)
+            parsed.append(RoleplayTurn(speaker_key=speaker, content=content))
+            continue
+
+        # Someone speaking, leaving, then coming back inside one round: the schema keeps one row per
+        # participant per turn (§9.3), so fold their second line into that row. Rejecting it looked
+        # safer and was not: a 2-person room told "1 to 3 turns" repeats a speaker (pigeonhole),
+        # and such scripts reached the learner as a 502. Measured before the fix: 7 of 23 advances.
+        existing = parsed[index]
+        parsed[index] = RoleplayTurn(speaker_key=speaker, content=f"{existing.content} {content}")
     return parsed
 
 
@@ -404,6 +420,15 @@ class OpenAICompatibleRoleplayProvider:
                 return await attempt()
             except ModelEndpointError as exc:
                 if attempts_left <= 0 or not exc.retryable:
+                    # The API answers 502 and the reason is gone by the time anyone looks; the log
+                    # is the only place the cause survives. `retryable` separates "the endpoint was
+                    # unlucky" from "this request will never work" before anything is read into it.
+                    logger.warning(
+                        "roleplay provider failed after %d attempt(s) (retryable=%s): %s",
+                        ROLEPLAY_ATTEMPTS - attempts_left,
+                        exc.retryable,
+                        exc,
+                    )
                     raise
                 await asyncio.sleep(self._retry_delay_seconds)
 
