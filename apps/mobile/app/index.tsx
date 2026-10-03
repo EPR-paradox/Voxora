@@ -39,9 +39,9 @@ export default function HomeScreen() {
   return (
     <Screen>
       <View style={styles.header}>
-        <Text style={styles.hero}>用英语把工作说清楚</Text>
+        <Text style={styles.hero}>把技术讲清楚，把机会拿下来</Text>
         <Text style={styles.heroHint}>
-          半导体行业的面试、会议、出差场景。练的是表达，不是技术结论。
+          面试、技术会议、客户沟通、出差、旅游等真实场景逐轮对练。每场结束给你一份基于原话的英语改进清单。
         </Text>
       </View>
 
