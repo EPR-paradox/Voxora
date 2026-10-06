@@ -25,7 +25,11 @@ export default function ScenarioDetailScreen() {
     mutationFn: () => createSession(scenarioId),
     onSuccess: (session) => {
       // replace, not push: coming back to this screen after finishing would offer a second "start".
-      router.replace({ pathname: "/practice/[sessionId]", params: { sessionId: session.id } });
+      // `speakOpening` tells the practice screen that its first data pass is the greeting, not history.
+      router.replace({
+        pathname: "/practice/[sessionId]",
+        params: { sessionId: session.id, speakOpening: "1" },
+      });
     },
   });
 

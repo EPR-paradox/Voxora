@@ -41,7 +41,12 @@ interface OutboxItem {
  * user message (§7.6, §9.3).
  */
 export default function PracticeScreen() {
-  const { sessionId } = useLocalSearchParams<{ sessionId: string }>();
+  // `speakOpening` marks the one entry where the lines that arrive are not history: the session was created
+  // a moment ago by 开始练习, so what lands on the first pass is the greeting itself.
+  const { sessionId, speakOpening } = useLocalSearchParams<{
+    sessionId: string;
+    speakOpening?: string;
+  }>();
   const router = useRouter();
   const queryClient = useQueryClient();
   const insets = useSafeAreaInsets();
@@ -225,14 +230,25 @@ export default function PracticeScreen() {
 
   // Speak the AI's lines as they arrive — but never the backlog. Entering a session with ten turns of
   // history must not start a monologue; the first pass only marks what is already there as heard.
+  //
+  // "First pass" has to mean the first pass *with data*. The screen renders once while the session query is
+  // still pending, and seeding on that empty snapshot marks nothing: the transcript then arrives looking
+  // entirely new, and opening a past session reads it out from the first line (measured: one synthesize
+  // request per assistant turn, one per second, just from opening the page).
+  //
+  // The one entry where those first lines are not history is a session created a moment ago by 开始练习
+  // (`speakOpening`): the greeting is the current turn, not a backlog.
   const spokenRef = useRef<Set<string>>(new Set());
   const seededRef = useRef(false);
   useEffect(() => {
+    if (messages.length === 0) return;
     const assistant = messages.filter((message) => message.role === "assistant");
     if (!seededRef.current) {
       seededRef.current = true;
-      for (const message of assistant) spokenRef.current.add(message.id);
-      return;
+      if (speakOpening !== "1") {
+        for (const message of assistant) spokenRef.current.add(message.id);
+        return;
+      }
     }
     const fresh = assistant.filter((message) => !spokenRef.current.has(message.id));
     if (fresh.length === 0) return;
