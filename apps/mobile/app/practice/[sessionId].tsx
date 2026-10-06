@@ -17,8 +17,10 @@ import { AppButton } from "../../src/components/AppButton";
 import { ErrorView, LoadingView } from "../../src/components/StateViews";
 import { newClientMessageId } from "../../src/api/client";
 import { ApiError, describeError } from "../../src/api/errors";
+import type { PracticeSessionDetail } from "../../src/api/types";
 import { finishSession } from "../../src/features/evaluation/api";
 import { abandonSession, getSession, sendMessage } from "../../src/features/practice/api";
+import { mergeExchange, messageKey } from "../../src/features/practice/messages";
 import { useMeetingListening } from "../../src/features/practice/useMeetingListening";
 import { useSpeechOutput, type SpeechLine } from "../../src/features/speech/useSpeechOutput";
 import { formatDuration, useVoiceInput } from "../../src/features/speech/useVoiceInput";
@@ -56,10 +58,17 @@ export default function PracticeScreen() {
 
   const send = useMutation({
     mutationFn: (item: OutboxItem) => sendMessage(sessionId, item.content, item.clientMessageId),
-    onSuccess: async (_response, item) => {
+    onSuccess: (response, item) => {
+      // Fold the exchange into the cache *first*, then drop the optimistic row: React batches both into one
+      // render, so the message goes straight from the local row to the server row with the same key
+      // (`messageKey`) and is never missing from the list. Invalidate afterwards to reconcile whatever the
+      // response does not carry — that refetch can no longer open a hole, because the data is already there.
+      queryClient.setQueryData<PracticeSessionDetail>(["session", sessionId], (current) =>
+        current ? mergeExchange(current, response) : current,
+      );
       setOutbox((items) => items.filter((entry) => entry.clientMessageId !== item.clientMessageId));
       setDraft("");
-      await queryClient.invalidateQueries({ queryKey: ["session", sessionId] });
+      void queryClient.invalidateQueries({ queryKey: ["session", sessionId] });
     },
     onError: (error, item) => {
       if (error instanceof ApiError && error.code === "session_not_active") {
@@ -126,16 +135,21 @@ export default function PracticeScreen() {
   // starts a new speaker run. Consecutive lines from one person are drawn as a group; otherwise three
   // voices in a row look like one long wall of text.
   const rows = useMemo(() => {
-    const serverRows = messages.map((message) => ({
-      key: message.id,
-      role: message.role,
-      speakerKey: message.speaker_key,
-      speakerName: message.speaker?.name ?? null,
-      content: message.content,
-      pending: message.status === "pending",
-      failed: message.status === "failed",
-      local: false,
-    }));
+    // A turn whose server row has already arrived is rendered from the cache, never twice: the local row is
+    // the same turn, and for one render after a refetch both exist.
+    const localKeys = new Set(outbox.map((item) => item.clientMessageId));
+    const serverRows = messages
+      .filter((message) => !message.client_message_id || !localKeys.has(message.client_message_id))
+      .map((message) => ({
+        key: messageKey(message),
+        role: message.role,
+        speakerKey: message.speaker_key,
+        speakerName: message.speaker?.name ?? null,
+        content: message.content,
+        pending: message.status === "pending",
+        failed: message.status === "failed",
+        local: false,
+      }));
     const localRows = outbox.map((item) => ({
       key: item.clientMessageId,
       role: "user" as const,
