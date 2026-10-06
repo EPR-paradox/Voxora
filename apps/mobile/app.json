@@ -13,7 +13,7 @@
     },
     "android": {
       "package": "com.eprparadox.voxora",
-      "versionCode": 3,
+      "versionCode": 4,
       "adaptiveIcon": {
         "backgroundColor": "#0f1115",
         "foregroundImage": "./assets/android-icon-foreground.png",
